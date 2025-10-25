@@ -12,8 +12,8 @@ dependencies = [
 ]
 
 [project.scripts]
-cmla-kmeans = "scripts.kmeans_cli:main"
-cmla-hmm = "scripts.hmm_cli:main"
+cmla-kmeans = "cmla.scripts.kmeans_cli:main"
+cmla-hmm   = "cmla.scripts.hmm_cli:main"
 
 [dependency-groups]
 dev = [
@@ -32,6 +32,9 @@ docs = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["cmla", "scripts"]
+
+[tool.setuptools.packages.find]
+exclude = ["models*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -42,12 +42,15 @@ class HMM:
         if feature_dim < 1:
             raise ValueError(f"feature_dim must be > 0. got {feature_dim}")
 
-        self.obs_prob = np.zeros(
-            (num_hidden_states, feature_dim)
-        )  # state emission probability, Pr(y|s[t]=i)
-        for m in range(num_hidden_states):
-            self.obs_prob[m, :] = np.random.uniform(0, 1, feature_dim)
-            self.obs_prob[m, :] = self.obs_prob[m, :] / self.obs_prob[m, :].sum()
+        if observation_type == "discrete":
+            self.obs_prob = np.zeros(
+                (num_hidden_states, feature_dim)
+            )  # state emission probability, Pr(y|s[t]=i)
+            for m in range(num_hidden_states):
+                self.obs_prob[m, :] = np.random.uniform(0, 1, feature_dim)
+                self.obs_prob[m, :] = self.obs_prob[m, :] / self.obs_prob[m, :].sum()
+        else:
+            raise NotImplementedError(f"Unknown observation_type: {observation_type}")
 
         # training variables (keep sufficient statistics for parameter update)
         self._ini_state_stat = np.zeros(num_hidden_states)
@@ -75,37 +78,6 @@ class HMM:
             int: number of hidden states
         """
         return self.state_tran.shape[0]
-
-    def randomize_state_transition_probabilities(self):
-        _vals = np.random.uniform(size=self.num_hidden_states)
-        self.init_state = _vals / sum(_vals)  # _vals > 0 is garanteered.
-
-        self.state_tran = np.random.uniform(
-            size=(self.num_hidden_states, self.num_hidden_states)
-        )
-        for m in range(self.num_hidden_states):
-            self.state_tran[m, :] = self.state_tran[m, :] / sum(self.state_tran[m, :])
-        assert np.allclose(self.state_tran.sum(axis=1), 1.0)
-        assert np.all(self.state_tran >= 0.0)
-        assert np.all(self.state_tran <= 1.0)
-        assert np.allclose(self.init_state.sum(), 1.0)
-        assert np.all(self.init_state >= 0.0)
-        assert np.all(self.init_state <= 1.0)
-        logger.debug(f"randomized state_tran=\n{self.state_tran}")
-        logger.debug(f"randomized init_state=\n{self.init_state}")
-        return
-
-    def randomize_observation_probabilities(self):
-        self.obs_prob = np.random.uniform(
-            size=(self.num_hidden_states, self.obs_prob.shape[1])
-        )
-        for m in range(self.num_hidden_states):
-            self.obs_prob[m, :] = self.obs_prob[m, :] / sum(self.obs_prob[m, :])
-        assert np.allclose(self.obs_prob.sum(axis=1), 1.0)
-        assert np.all(self.obs_prob >= 0.0)
-        assert np.all(self.obs_prob <= 1.0)
-        logger.debug(f"randomized obs_prob=\n{self.obs_prob}")
-        return
 
     def viterbi_search(self, obss):
         """Viterbi search of discrete observation HMM. Likelihood is in log scale.
@@ -552,3 +524,6 @@ def load_hmm_and_data_from_pickle(in_file: str):
         x = data.get("sample", None)
         st = data.get("latent", None)
         return hmm, x, st
+
+
+# Import utils module for convenient access

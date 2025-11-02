@@ -238,6 +238,35 @@ Baum-Welch Training
    print(f"Observation matrix:\n{hmm_train.observation_matrix}")
    print(f"Initial probabilities: {hmm_train.initial_state_probability}")
 
+Utility Functions
+~~~~~~~~~~~~~~~~~
+
+The CMLA HMM module provides utility functions for parameter randomization:
+
+.. code-block:: python
+
+   import cmla.models.hmm as hmm_module
+   from cmla.models.hmm import HMM
+
+   # Create an HMM
+   hmm = HMM(num_states=2, num_observations=3)
+
+   # Method 1: Direct import from utils
+   from cmla.models.utils import randomize_state_transition_probabilities
+   randomize_state_transition_probabilities(hmm)
+
+   # Method 2: Using hmm module utilities
+   hmm_module.utils.randomize_observation_probabilities(hmm)
+
+   # Method 3: Randomize all probabilities at once
+   hmm_module.utils.randomize_all_probabilities(hmm)
+
+Available utility functions:
+
+* ``randomize_state_transition_probabilities(hmm)`` - Randomizes state transition matrix
+* ``randomize_observation_probabilities(hmm)`` - Randomizes observation probability matrix
+* ``randomize_all_probabilities(hmm)`` - Randomizes all HMM parameters
+
 Command-Line Interface
 ----------------------
 

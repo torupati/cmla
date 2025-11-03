@@ -6,6 +6,11 @@ import numpy as np
 from cmla.models.hmm import HMM, hmm_baum_welch, hmm_viterbi_training
 from cmla.models.sampler import sampling_from_hmm
 
+from cmla.models.utils import (
+    randomize_state_transition_probabilities,
+    randomize_observation_probabilities,
+)
+
 
 def test_viterbi_search():
     """
@@ -93,8 +98,8 @@ def test_viterbi_training():
     hmm.state_tran = np.array([[0.5, 0.5], [0.5, 0.5]])
     hmm.obs_prob = np.array([[0.5, 0.2, 0.2, 0.1, 0.0], [0.00, 0.1, 0.4, 0.4, 0.1]])
 
-    hmm.randomize_state_transition_probabilities()
-    hmm.randomize_observation_probabilities()
+    randomize_state_transition_probabilities(hmm)
+    randomize_observation_probabilities(hmm)
     print(f"hmm={hmm}")
     hist = hmm_viterbi_training(hmm, training_data)
     print(f"hmm={hmm}")
@@ -118,8 +123,8 @@ def test_baum_welch():
     hmm.state_tran = np.array([[0.9, 0.1], [0.5, 0.5]])
     hmm.obs_prob = np.array([[0.5, 0.2, 0.2, 0.1, 0.0], [0.0, 0.1, 0.4, 0.4, 0.1]])
 
-    hmm.randomize_state_transition_probabilities()
-    hmm.randomize_observation_probabilities()
+    randomize_state_transition_probabilities(hmm)
+    randomize_observation_probabilities(hmm)
     print(f"hmm={hmm}")
     hmm_baum_welch(hmm, training_data)
     print(f"hmm={hmm}")

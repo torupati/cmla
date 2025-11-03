@@ -1,6 +1,7 @@
 # Hidden Markov Models implementaton for learning purpose
 # Reference: "Pattern Recognition and Machine Learning" by C. M. Bishop, Chapter 13
 
+import json
 import pickle
 from logging import getLogger
 from os import makedirs, path
@@ -365,6 +366,55 @@ class HMM:
         self._training_total_log_likelihood = 0.0
         return tll
 
+    def save_hmm_and_data(self, out_file: str, x: np.ndarray, st: np.ndarray):
+        """Save HMM model and data to pickle or JSON file based on file extension.
+        Args:
+            out_file (str): output file name (.pkl/.pickle for pickle, .json for JSON)
+            x (np.ndarray): observation sequence
+            st (np.ndarray): latent state sequence
+        """
+        hmm_param_dict = {
+            "init_state": self.init_state,
+            "state_tran": self.state_tran,
+            "obs_prob": self.obs_prob,
+            "n_state": self.num_hidden_states,
+        }
+
+        data = {
+            "model_param": hmm_param_dict,
+            "sample": x,
+            "latent": st,
+            "model_type": "HMM",
+        }
+
+        # Determine file format based on extension
+        file_ext = path.splitext(out_file)[1].lower()
+
+        if file_ext in [".pkl", ".pickle"]:
+            # Save as pickle
+            with open(out_file, "wb") as f:
+                pickle.dump(data, f)
+        elif file_ext == ".json":
+            # Convert numpy arrays to lists for JSON serialization
+            json_data = {
+                "model_param": {
+                    "init_state": hmm_param_dict["init_state"].tolist(),
+                    "state_tran": hmm_param_dict["state_tran"].tolist(),
+                    "obs_prob": hmm_param_dict["obs_prob"].tolist(),
+                    "n_state": hmm_param_dict["n_state"],
+                },
+                "sample": x.tolist(),
+                "latent": st.tolist(),
+                "model_type": "HMM",
+            }
+            # Save as JSON
+            with open(out_file, "w", encoding="utf-8") as f:
+                json.dump(json_data, f, indent=2, ensure_ascii=False)
+        else:
+            raise ValueError(
+                f"Unsupported file extension: {file_ext}. Use .pkl, .pickle, or .json"
+            )
+
 
 def hmm_viterbi_training(hmm, obss_seqs, itr_limit: int = 10) -> dict:
     """
@@ -468,35 +518,68 @@ def hmm_baum_welch(hmm, obss_seqs, itr_limit: int = 100) -> dict:
     return ll_history
 
 
-def pickle_hmm_and_data_by_dict(out_file: str, hmm: HMM, x: np.ndarray, st: np.ndarray):
-    """Save HMM model and data to pickle file.
+def load_hmm_and_data(in_file: str):
+    """Load HMM model and data from pickle or JSON file based on file extension.
     Args:
-        out_file (str): output file name
+        in_file (str): input file name (.pkl/.pickle for pickle, .json for JSON)
+    Returns:
         hmm (HMM): HMM model
         x (np.ndarray): observation sequence
         st (np.ndarray): latent state sequence
     """
-    hmm_param_dict = {
-        "init_state": hmm.init_state,
-        "state_tran": hmm.state_tran,
-        "obs_prob": hmm.obs_prob,
-        "n_state": hmm.M,
-        "n_obs": hmm.D,
-    }
-    with open(out_file, "wb") as f:
-        pickle.dump(
-            {
-                "model_param": hmm_param_dict,
-                "sample": x,
-                "latent": st,
-                "model_type": "HMM",
-            },
-            f,
+    file_ext = path.splitext(in_file)[1].lower()
+
+    if file_ext in [".pkl", ".pickle"]:
+        # Load from pickle
+        with open(in_file, "rb") as f:
+            data = pickle.load(f)
+    elif file_ext == ".json":
+        # Load from JSON
+        with open(in_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Convert lists back to numpy arrays
+        if "model_param" in data:
+            model_param = data["model_param"]
+            if "init_state" in model_param:
+                model_param["init_state"] = np.array(model_param["init_state"])
+            if "state_tran" in model_param:
+                model_param["state_tran"] = np.array(model_param["state_tran"])
+            if "obs_prob" in model_param:
+                model_param["obs_prob"] = np.array(model_param["obs_prob"])
+        if "sample" in data:
+            data["sample"] = np.array(data["sample"])
+        if "latent" in data:
+            data["latent"] = np.array(data["latent"])
+    else:
+        raise ValueError(
+            f"Unsupported file extension: {file_ext}. Use .pkl, .pickle, or .json"
         )
+
+    model_param = data.get("model_param", None)
+    if model_param is None:
+        raise ValueError(f"model_param not found in {in_file}")
+
+    n_state = model_param.get("n_state", None)
+    # Try to infer n_obs from obs_prob shape if not directly available
+    n_obs = model_param.get("n_obs", None)
+    if n_obs is None and "obs_prob" in model_param:
+        n_obs = model_param["obs_prob"].shape[1]
+
+    if n_state is None or n_obs is None:
+        raise ValueError(f"n_state or n_obs not found in model_param of {in_file}")
+
+    hmm = HMM(n_state, n_obs)
+    hmm.init_state = model_param.get("init_state", hmm.init_state)
+    hmm.state_tran = model_param.get("state_tran", hmm.state_tran)
+    hmm.obs_prob = model_param.get("obs_prob", hmm.obs_prob)
+    x = data.get("sample", None)
+    st = data.get("latent", None)
+    return hmm, x, st
 
 
 def load_hmm_and_data_from_pickle(in_file: str):
     """Load HMM model and data from pickle file.
+    Deprecated: Use load_hmm_and_data() instead for automatic format detection.
     Args:
         in_file (str): input file name
     Returns:
@@ -504,22 +587,7 @@ def load_hmm_and_data_from_pickle(in_file: str):
         x (np.ndarray): observation sequence
         st (np.ndarray): latent state sequence
     """
-    with open(in_file, "rb") as f:
-        data = pickle.load(f)
-        model_param = data.get("model_param", None)
-        if model_param is None:
-            raise ValueError(f"model_param not found in {in_file}")
-        n_state = model_param.get("n_state", None)
-        n_obs = model_param.get("n_obs", None)
-        if n_state is None or n_obs is None:
-            raise ValueError(f"n_state or n_obs not found in model_param of {in_file}")
-        hmm = HMM(n_state, n_obs)
-        hmm.init_state = model_param.get("init_state", hmm.init_state)
-        hmm.state_tran = model_param.get("state_tran", hmm.state_tran)
-        hmm.obs_prob = model_param.get("obs_prob", hmm.obs_prob)
-        x = data.get("sample", None)
-        st = data.get("latent", None)
-        return hmm, x, st
+    return load_hmm_and_data(in_file)
 
 
 # Import utils module for convenient access

@@ -131,10 +131,6 @@ class HMM:
                 # calculate path from each s[t-1]. _probs is array
                 _trellis_bp[j, t] = _probs.argmax()
                 _trellis_prob[j, t] = _probs[_trellis_bp[j, t]]
-                # print(f'back pointer[t={t}, s={j}]={_trellis_bp[j,t]}')
-            # print('t=', t)
-            # print('trellis=', _trellis_prob[:,t])
-        # print(_trellis_prob)
         # back traincing
         best_path: List[int] = []
         t, s = T - 1, _trellis_prob[:, -1].argmax()
@@ -193,7 +189,7 @@ class HMM:
                 _log_obsprob[t, s] = np.dot(x_t, np.log(self.obs_prob[s, :]))
         return _log_obsprob
 
-    def forward_algorithm(self, obsprob) -> (np.ndarray, np.ndarray):
+    def forward_algorithm(self, obsprob) -> tuple[np.ndarray, np.ndarray]:
         """HMM forward algorithm
         Compute forward variable alpha and scaling factor alpha_scale
         in linear scale (not log scale).
@@ -221,13 +217,13 @@ class HMM:
         _alpha_scale[0] = _alpha[0, :].sum()
         _alpha[0, :] = _alpha[0, :] / _alpha_scale[0]
         for t in range(1, T):  # for each time step t = 1, ..., T-1
-            for i in range(self.num_hidden_states):  # for each state s[t]=i
-                # _alpha[t, i] = 0.0
-                # for _i0 in range(self.num_hidden_states):
-                #    _alpha[t, i] += (
-                #        _alpha[t - 1, _i0] * self.state_tran[_i0, i] * obsprob[t, i]
-                #    )
-                _alpha[t, :] = (_alpha[t - 1, :] @ self.state_tran) * obsprob[t, :]
+            # for i in range(self.num_hidden_states):  # for each state s[t]=i
+            # _alpha[t, i] = 0.0
+            # for _i0 in range(self.num_hidden_states):
+            #    _alpha[t, i] += (
+            #        _alpha[t - 1, _i0] * self.state_tran[_i0, i] * obsprob[t, i]
+            #    )
+            _alpha[t, :] = (_alpha[t - 1, :] @ self.state_tran) * obsprob[t, :]
             _alpha_scale[t] = _alpha[t, :].sum()
             _alpha[t, :] = _alpha[t, :] / _alpha_scale[t]
             # P(s[t]=s | X[t]=x[t], S)

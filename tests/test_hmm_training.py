@@ -38,8 +38,13 @@ def test_forward_backward():
     )
     hmm_init = copy.deepcopy(hmm)
     ll_history = hmm_baum_welch(hmm, obs_seqs, itr_limit=100)
+    previous_loglikelihood = -np.inf
+    for i, loglikelihood in enumerate(ll_history["log_likelihood"]):
+        assert loglikelihood >= previous_loglikelihood, (
+            f"Log-likelihood did not increase! {i} th iteration: {loglikelihood} < {previous_loglikelihood}"
+        )
+        previous_loglikelihood = loglikelihood
     print(hmm.state_tran)
-    # print(ll_history)
     print("")
     import json
 

@@ -2,7 +2,6 @@
 # Reference: "Pattern Recognition and Machine Learning" by C. M. Bishop, Chapter 9
 
 import logging
-import pickle
 
 import numpy as np
 from numpy import array, dot, ndarray, sum
@@ -87,14 +86,16 @@ class GaussianMixtureModel:
         Returns:
             float: Total log-likelihood
         """
-        N = x.shape[0]
-        y = np.zeros((N, self.num_components))  # keep all Gaussian pdf (not smart)
+        num_obs = x.shape[0]
+        y = np.zeros(
+            (num_obs, self.num_components)
+        )  # keep all Gaussian pdf (not smart)
         for k in range(self.num_components):
             y[:, k] = multivariate_normal(self.Mu[k, :], self.Sigma[k, :, :]).pdf(
                 x
             )  # (K,N)
         lh = 0
-        for n in range(N):
+        for n in range(num_obs):
             wk = 0
             for k in range(self.num_components):
                 wk = wk + self.Pi[k] * y[n, k]
@@ -111,7 +112,7 @@ class GaussianMixtureModel:
             gam(np.ndarray): probability of x(n) in k-th Gaussian, P(k|x[n]), shape=(N,K)
             llh(float): log-likelihood
         """
-        N = x.shape[0]
+        num_obs = x.shape[0]
         # caluclate P(x[n], k) = P(k)P(x[n]|k) and hold all as array (n,m)
         try:
             gam = array(
@@ -128,7 +129,7 @@ class GaussianMixtureModel:
             print(self.Sigma)
             raise e
         llh = 0.0  # log likelihood of all training data
-        for n in range(N):
+        for n in range(num_obs):
             _s = sum(gam[n, :])  # P(x[n]) = sum_k P(k,x[n])
             gam[n, :] = gam[n, :] / _s
             llh += np.log(_s)
@@ -140,7 +141,7 @@ class GaussianMixtureModel:
         Args:
             X(N,D), training samples. (N is number of samples, D is dimension)
         """
-        N = x.shape[0]
+        num_obs = x.shape[0]
         self.Pi = sum(gamma, axis=0) / sum(gamma)
         self.Mu = dot(gamma.transpose(), x)
         for m in range(self.num_components):
@@ -151,7 +152,7 @@ class GaussianMixtureModel:
             # for m in range(self._M):
             #    if sum(gamma[:,m]) < 1.0E-5:
             #        continue
-            for n in range(N):
+            for n in range(num_obs):
                 wk = x - self.Mu[m, :]  # distance between x and m-th Gaussian's mean
                 wk = wk[n, :, np.newaxis]
                 self.Sigma[m, :, :] = self.Sigma[m, :, :] + gamma[n, m] * np.dot(
@@ -166,21 +167,6 @@ class GaussianMixtureModel:
                 print("gamma = ", np.sum(gamma[:, m]), " covariance is not updated.")
                 # input()
         return True
-
-    def split_Gaussian(self):
-        """
-        Not implemented yet.
-        """
-        raise NotImplementedError("not implemented")
-        # gauss_vars = {}
-        # for m in self._M:
-        #    var = np.sum(np.diag(self.Sigma[m,:,:]))
-        #    gauss_vars[m] = var
-        # max_m = max(guass_vars, key=gauss_vars.get)
-        # self._M += 1
-        #
-        # self.Mu = np.random.randn(self._M, self._D)
-        # self.Sigma = np.zeros((self._M, self._D, self._D))
 
 
 def train_gmm(gmm: GaussianMixtureModel, X: np.ndarray, max_it: int = 12, **kwargs):
@@ -231,15 +217,6 @@ def train_gmm(gmm: GaussianMixtureModel, X: np.ndarray, max_it: int = 12, **kwar
                 fig.savefig(out_pngfile)
                 logger.info("save PNG file: %s", out_pngfile)
     return gmm, loglikelihood_history
-
-
-def load_from_pickle_file(input_file: str):
-    with open(input_file, "rb") as f:
-        indata = pickle.load(f)
-        # print(indata)
-    X = indata["sample"]  # data points.
-    Param = indata["model_param"]  # model parameters.
-    return X, Param
 
 
 def gmm_em_training_mixutre_scan(X, max_mixnum: int = 10):

@@ -3,12 +3,26 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-CMLA - Computational Mathematics and Linear Algebra
+CMLA - Classical Machine Learning Algorithms
 ====================================================
+
+.. image:: https://img.shields.io/badge/version-v0.1.0--alpha-orange
+   :target: https://github.com/torupati/cmla/releases/tag/v0.1.0-alpha
+   :alt: Version
+
+.. image:: https://img.shields.io/badge/license-MIT-blue.svg
+   :target: https://github.com/torupati/cmla/blob/main/LICENSE
+   :alt: License
 
 **CMLA** is a Python package for mathematical algorithms and data analysis,
 providing implementations of fundamental machine learning and statistical algorithms
 for educational and research purposes.
+
+.. note::
+   **Current Version: v0.1.0-alpha** (Initial Alpha Release)
+
+   This is an early alpha release containing core implementations of K-means, GMM,
+   and HMM algorithms with comprehensive documentation and CLI tools.
 
 Features
 --------

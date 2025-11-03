@@ -588,12 +588,3 @@ def load_hmm_and_data_from_pickle(in_file: str):
         st (np.ndarray): latent state sequence
     """
     return load_hmm_and_data(in_file)
-
-
-# Import utils module for convenient access
-# This import is done at the end to avoid circular imports
-try:
-    from . import utils
-except ImportError:
-    # Handle case where utils module is not available
-    utils = None

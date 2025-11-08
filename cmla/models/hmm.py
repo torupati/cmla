@@ -575,16 +575,3 @@ def load_hmm_and_data(in_file: str):
     x = data.get("sample", None)
     st = data.get("latent", None)
     return hmm, x, st
-
-
-def load_hmm_and_data_from_pickle(in_file: str):
-    """Load HMM model and data from pickle file.
-    Deprecated: Use load_hmm_and_data() instead for automatic format detection.
-    Args:
-        in_file (str): input file name
-    Returns:
-        hmm (HMM): HMM model
-        x (np.ndarray): observation sequence
-        st (np.ndarray): latent state sequence
-    """
-    return load_hmm_and_data(in_file)

@@ -403,8 +403,8 @@ class HMM:
                     "obs_prob": hmm_param_dict["obs_prob"].tolist(),
                     "n_state": hmm_param_dict["n_state"],
                 },
-                "sample": x.tolist(),
-                "latent": st.tolist(),
+                "sample": x.tolist() if hasattr(x, "tolist") else x,
+                "latent": st.tolist() if hasattr(st, "tolist") else st,
                 "model_type": "HMM",
             }
             # Save as JSON

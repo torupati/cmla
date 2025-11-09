@@ -2,7 +2,6 @@
 # coding by Python and Numpy.
 
 import logging
-from pathlib import Path
 
 import numpy as np
 
@@ -454,40 +453,3 @@ def kmeans_clustering(X: np.ndarray, mu_init: np.ndarray, **kwargs):
             plt.close(fig)
 
     return kmeansparam, cost_history
-
-
-def pickle_kmeans_and_data_by_dict(
-    out_file: Path, kmeans_param_dict: dict, X: np.ndarray
-):
-    """
-    Serializes and saves KMeans clustering parameters and data to a file.
-
-    Args:
-        out_file (Path): The path to the output file where the serialized data will be saved.
-        kmeans_param_dict: dict: A dictionary containing KMeans clustering parameters.
-            Expected keys in the dictionary:
-                - Mu: The cluster centroids.
-                - Sigma: The cluster covariances.
-                - Pi: The cluster weights.
-                - covariance_mode: The type of covariance used in the model.
-                - train_vars_mode: The training variables mode.
-                - DistanceType: The distance metric used.
-        X (np.ndarray): The data samples to be saved along with the model parameters.
-
-    Returns:
-        None: This function does not return a value. It writes the serialized data to the specified file.
-
-    Raises:
-        IOError: If there is an issue writing to the specified file.
-    """
-    import pickle
-
-    with open(out_file, "wb") as f:
-        pickle.dump(
-            {
-                "model_param": kmeans_param_dict,
-                "sample": X,
-                "model_type": "KmeansClustering",
-            },
-            f,
-        )

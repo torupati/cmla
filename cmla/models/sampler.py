@@ -1,7 +1,4 @@
-# Sampler functions for HMM and K-Means
-
 import logging
-
 import numpy as np
 
 from cmla.models.hmm import HMM
@@ -9,11 +6,18 @@ from cmla.models.hmm import HMM
 logger = logging.getLogger(__name__)
 
 
-def generate_sample_parameter(K: int = 4, D: int = 2, **kwargs):
-    """Create D-dimensional K component mean and covariance.
+def generate_sample_parameter(
+    num_components: int = 4, feature_dimension: int = 2, **kwargs
+) -> tuple:
+    """Generate random GMM parameters.
+    Args:
+        num_components (int, optional): number of clusters. Defaults to 4.
+        feature_dimension (int, optional): dimension of samples. Defaults to 2.  In this case,
 
     Returns:
-        _type_: _description_
+        tuple: A tuple containing initial probabilities, mean vectors, and covariance matrices.
+
+    Note: The default covariance matrices are identity matrices.
     """
     if kwargs.get("PRESET", False):
         init_prob = np.array([[3.0, 3.0], [0.0, 2.0], [2.0, -3.5], [-3.0, 0.0]])
@@ -28,11 +32,11 @@ def generate_sample_parameter(K: int = 4, D: int = 2, **kwargs):
         )
         return init_prob, covariances
 
-    init_prob = np.array([1 / K] * K)
-    mean_vectors = np.random.randn(K, D)
-    covariances = np.zeros((K, D, D))
-    for k in range(K):
-        covariances[k, :, :] = np.eye(D)
+    init_prob = np.array([1 / num_components] * num_components)
+    mean_vectors = np.random.randn(num_components, feature_dimension)
+    covariances = np.zeros((num_components, feature_dimension, feature_dimension))
+    for k in range(num_components):
+        covariances[k, :, :] = np.eye(feature_dimension)
     return init_prob, mean_vectors, covariances
 
 

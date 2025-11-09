@@ -4,13 +4,14 @@
 # python tools/sample_generator.py GMM 1000 out_gmm.pickle --cluster 4 --dimension 2
 # python tools/sample_generator.py HMM 100 out_hmm.pickle --avelen 10
 # python tools/sample_generator.py MM 100 out_mm.pickle
+import json
 import logging
+import pickle
 
 import numpy as np
 
-from src.hmm.hmm import HMM, pickle_hmm_and_data_by_dict
-from src.hmm.kmeans import pickle_kmeans_and_data_by_dict
-from src.hmm.sampler import (
+from cmla.models.hmm import HMM
+from cmla.models.sampler import (
     generate_gmm_samples,
     generate_sample_parameter,
     sample_lengths,
@@ -28,13 +29,17 @@ logging.basicConfig(
 )
 
 
-def main_gmm(args):
-    """_summary_
+def generate_gmm_observation_func(args):
+    """Generate observations from a Gaussian Mixture Model.
 
     Args:
-        args (_type_): _description_
+        args: Command line arguments containing parameters for GMM generation.
     """
     _logger.info(f"{args=}")
+
+    # Set random seed for reproducible results
+    np.random.seed(args.random_seed)
+
     init_prob, mean_vectors, covariances = generate_sample_parameter(
         args.cluster, args.dimension
     )
@@ -47,8 +52,11 @@ def main_gmm(args):
     )
 
     if args.csv:
-        np.savetxt(args.out_file, sample_data, delimiter=",")
-    else:
+        csv_file = args.out_file.replace(".json", ".csv").replace(".pkl", ".csv")
+        np.savetxt(csv_file, sample_data, delimiter=",")
+        _logger.info("CSV output: %s", csv_file)
+
+    if args.pickle:
         kmeans_param_dict = {
             "Mu": mean_vectors,
             "Sigma": covariances,
@@ -57,8 +65,39 @@ def main_gmm(args):
             "trainvars": "outside",
             "dist_mode": "linear",
         }
-        pickle_kmeans_and_data_by_dict(args.out_file, kmeans_param_dict, sample_data)
-    _logger.info("output: %s", args.out_file)
+        pickle_file = args.out_file.replace(".json", ".pkl")
+        with open(pickle_file, "wb") as f:
+            pickle.dump(
+                {
+                    "model_param": kmeans_param_dict,
+                    "sample": sample_data,
+                    "model_type": "KmeansClustering",
+                },
+                f,
+            )
+        _logger.info("Pickle output: %s", pickle_file)
+
+    # Always save as JSON (default format)
+    kmeans_param_dict = {
+        "Mu": mean_vectors.tolist(),
+        "Sigma": covariances.tolist(),
+        "Pi": init_prob.tolist(),
+        "covariance_type": "diag",
+        "trainvars": "outside",
+        "dist_mode": "linear",
+    }
+    with open(args.out_file, "w") as f:
+        json.dump(
+            {
+                "model_param": kmeans_param_dict,
+                "sample": sample_data.tolist(),
+                "labels": labels,
+                "model_type": "KmeansClustering",
+            },
+            f,
+            indent=2,
+        )
+    _logger.info("JSON output: %s", args.out_file)
 
 
 def main_mm(args):
@@ -72,15 +111,27 @@ def main_mm(args):
 
     if args.csv:
         save_sequences_with_blank(args.out_file, sample_data)
+        _logger.info("CSV output: %s", args.out_file)
     else:
         markov_model_dict = {
-            "init_prob": init_state,
-            "tran_prob": state_tran,
+            "init_prob": init_state.tolist(),
+            "tran_prob": state_tran.tolist(),
             "model_type": "MarkovProcess",
             "number_of_process": args.N,
         }
-        pickle_kmeans_and_data_by_dict(args.out_file, markov_model_dict, sample_data)
-    _logger.info("output: %s", args.out_file)
+
+        # Save as JSON
+        with open(args.out_file, "w") as f:
+            json.dump(
+                {
+                    "model_param": markov_model_dict,
+                    "sample": sample_data,  # sample_data is already a list
+                    "model_type": "MarkovProcess",
+                },
+                f,
+                indent=2,
+            )
+        _logger.info("JSON output: %s", args.out_file)
 
 
 def main_hmm(args):
@@ -95,11 +146,13 @@ def main_hmm(args):
     x_lengths = sample_lengths(args.avelen, args.N)
     st, x = sampling_from_hmm(x_lengths, hmm_param)
 
-    pickle_hmm_and_data_by_dict(args.out_file, hmm_param, x, st)
+    # Save HMM data using the model's built-in save method
+    hmm_param.save_hmm_and_data(args.out_file, x, st)
     _logger.info(f"output: {args.out_file}")
 
 
-if __name__ == "__main__":
+def create_parser():
+    """Create and return the argument parser"""
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -110,10 +163,15 @@ if __name__ == "__main__":
 
     parser.add_argument("N", type=int, help="number of sample")
     parser.add_argument(
-        "out_file", type=str, help="output file name(out.pickle)", default="out.pickle"
+        "out_file", type=str, help="output file name", default="sample_data.json"
     )
     parser.add_argument(
-        "--csv", action="store_true", help="output csv format. default: pickle format"
+        "--csv", action="store_true", help="output csv format. default: json format"
+    )
+    parser.add_argument(
+        "--pickle",
+        action="store_true",
+        help="output pickle format. default: json format",
     )
 
     subparsers = parser.add_subparsers(
@@ -131,9 +189,9 @@ if __name__ == "__main__":
     parser_gmm = subparsers.add_parser("GMM", help="Gaussian Mixture models")
     parser_gmm.add_argument("--cluster", type=int, help="number of cluster", default=4)
     parser_gmm.add_argument("--dimension", type=int, help="vector dimension", default=2)
-    # parser.add_argument('filename')
+    parser_gmm.add_argument("--random-seed", type=int, help="random seed", default=0)
     # parser.add_argument('-v', '--verbose', action='store_true')
-    parser_gmm.set_defaults(func=main_gmm)
+    parser_gmm.set_defaults(func=generate_gmm_observation_func)
 
     # Hidden Markov Model
     parser_hmm = subparsers.add_parser("HMM", help="Hidden markov models")
@@ -142,5 +200,15 @@ if __name__ == "__main__":
     )
     parser_hmm.set_defaults(func=main_hmm)
 
+    return parser
+
+
+def main():
+    """Main entry point for the CLI"""
+    parser = create_parser()
     args = parser.parse_args()
     args.func(args)
+
+
+if __name__ == "__main__":
+    main()

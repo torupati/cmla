@@ -46,9 +46,11 @@ def train_kmeans(args):
         initial_centroids = np.random.randn(args.clusters, n_features)
 
         # Train using the existing clustering function
-        final_centroids, labels = kmeans_clustering(
-            data, initial_centroids, max_iter=args.max_iter, tol=args.tolerance
+        kmeans_model, _ = kmeans_clustering(
+            data, initial_centroids, max_it=args.max_iter
         )
+        final_centroids = kmeans_model.Mu
+        labels = kmeans_model.predict(data)
 
         print("Training completed!")
         print("Centroids:")

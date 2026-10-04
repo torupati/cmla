@@ -255,13 +255,16 @@ data converge to the wrong split about half the time.
   `self.Sigma` before adding to it,** so the new covariance contains the old
   one. Don't reuse it for `GMMEmission`; the new `gaussian.py` helper can
   replace it later.
-- **`cmla/scripts/hmm_cli.py` calls `HMM(num_states=..., num_observations=...)`
+- ~~**`cmla/scripts/hmm_cli.py` calls `HMM(num_states=..., num_observations=...)`
   and sets `transition_matrix`/`observation_matrix`.** None of those names exist
-  on `HMM`, so `cmla-hmm` crashes on every path. Fix this in step 5.
-- **`hmm_baum_welch` always writes checkpoints to `models/checkpoints/` and
-  uses `print`.** Make the directory a parameter and use `logger`.
-- **`hmm_plot.plot_checkpoint_dir` hard-codes 3 states and 4 symbol names,**
-  so it fails on any other model size. Derive the layout from the model.
+  on `HMM`, so `cmla-hmm` crashes on every path.~~ Rewritten in step 5 with
+  `train` / `viterbi` / `forward` subcommands.
+- ~~**`hmm_baum_welch` always writes checkpoints to `models/checkpoints/` and
+  uses `print`.**~~ Step 5: `checkpoint_dir` (None disables) and
+  `checkpoint_interval` parameters; progress goes to `logger`. The default
+  directory is unchanged for compatibility.
+- ~~**`hmm_plot.plot_checkpoint_dir` hard-codes 3 states and 4 symbol names.**~~
+  Step 5: layout comes from the model; GMM emissions are drawn as ellipses.
 - **`KmeansCluster` covariance statistics are wrong** (`cmla/models/kmeans.py`):
   `PushSample` assigns `_X2[k] = x*x` instead of adding, and
   `UpdateParameters` sets the whole `Sigma` array from one cluster. Also
@@ -270,6 +273,12 @@ data converge to the wrong split about half the time.
 - ~~**The training loops `assert` that the log-likelihood never decreases.**~~
   Fixed in step 3: relative tolerance 1e-9. Converged GMM-HMM training showed
   decreases of about 1e-16 relative.
+
+- ~~**`sampling_from_hmm` returned the states of the last sequence only.**~~
+  Step 5: it returns one state sequence per observation sequence.
+- **`cmla/models/kmeans.py` set its logger level to INFO at import,** which
+  printed k-means progress regardless of the application's logging level.
+  Removed in step 5.
 
 ## Decisions
 
@@ -283,4 +292,4 @@ data converge to the wrong split about half the time.
 - [x] Step 2: unified save/load (`HMM.to_dict`/`from_dict`, v2 format, v1 loader)
 - [x] Step 3: `GMMEmission` (diagonal) and `gaussian.py`
 - [x] Step 4: initialisation (`init_gmm_hmm`, uniform segmentation and k-means)
-- [ ] Step 5: tools and docs
+- [x] Step 5: tools and docs (`hmm_cli` rewrite, sampler `HMM-GMM`, `hmm_plot`, docs)

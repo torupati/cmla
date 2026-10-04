@@ -91,30 +91,33 @@ Hidden Markov Model
    from cmla.models.hmm import HMM
    import numpy as np
 
-   # Create HMM
-   hmm = HMM(num_states=2, num_observations=2)
+   # Create HMM: 2 hidden states, 2 observation symbols
+   hmm = HMM(2, 2)
 
    # Set up a simple model (Fair/Biased coin example)
-   hmm.transition_matrix = np.array([
+   hmm.state_tran = np.array([
        [0.95, 0.05],  # Fair -> Fair, Fair -> Biased
        [0.10, 0.90]   # Biased -> Fair, Biased -> Biased
    ])
 
-   hmm.observation_matrix = np.array([
+   hmm.obs_prob = np.array([
        [0.5, 0.5],    # Fair coin: equal probability
        [0.1, 0.9]     # Biased coin: mostly heads
    ])
 
-   hmm.initial_state_probability = np.array([0.5, 0.5])
+   hmm.init_state = np.array([0.5, 0.5])
 
    # Observation sequence (0=Tails, 1=Heads)
    observations = [1, 1, 0, 1, 1, 1, 0, 1, 1, 1]
 
    # Find most likely state sequence
-   path, prob = hmm.viterbi(observations)
+   path, log_prob = hmm.viterbi_search(observations)
    print(f"Observations: {observations}")
    print(f"Most likely states: {path}")
-   print(f"Probability: {prob}")
+   print(f"log P(O, path): {log_prob}")
+
+For real-valued observation vectors use a GMM-HMM
+(``HMM(M, D, observation_type="gmm", num_mixtures=K)``); see :doc:`algorithms/hmm`.
 
 Command Line Tools
 ------------------
@@ -137,11 +140,11 @@ HMM CLI
 
 .. code-block:: bash
 
-   # Run Viterbi algorithm
-   uv run python scripts/hmm_cli.py --viterbi --observations "0 1 1 0 1"
+   # Train HMM model (data: one symbol per line, blank line between sequences)
+   uv run python -m cmla.scripts.hmm_cli train --data-file observations.txt -o model.json
 
-   # Train HMM model
-   uv run python scripts/hmm_cli.py --train --data-file observations.txt
+   # Run Viterbi algorithm
+   uv run python -m cmla.scripts.hmm_cli viterbi --model model.json --observations "0 1 1 0 1"
 
 Common Workflows
 ----------------
@@ -221,14 +224,17 @@ Time Series Analysis
        observations.append(obs)
 
    # Train HMM
-   hmm = HMM(num_states=2, num_observations=2)
-   log_likelihoods = hmm.train_baum_welch([observations], max_iterations=50)
+   from cmla.models.hmm import hmm_baum_welch
+
+   hmm = HMM(2, 2)
+   history = hmm_baum_welch(hmm, [observations], itr_limit=50, checkpoint_dir=None)
 
    # Decode states
-   predicted_states, _ = hmm.viterbi(observations)
+   predicted_states, _ = hmm.viterbi_search(observations)
 
-   # Evaluate accuracy
+   # Evaluate accuracy (state labels of a trained model may be swapped)
    accuracy = np.mean(np.array(true_states) == np.array(predicted_states))
+   accuracy = max(accuracy, 1.0 - accuracy)
    print(f"State prediction accuracy: {accuracy:.2f}")
 
 Next Steps

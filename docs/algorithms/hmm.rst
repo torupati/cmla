@@ -125,255 +125,225 @@ Baum-Welch Re-estimation
    a_{ij}^{new} &= \frac{\sum_{t=1}^{T-1} \xi_t(i,j)}{\sum_{t=1}^{T-1} \gamma_t(i)} \\
    b_j^{new}(k) &= \frac{\sum_{t=1, o_t=v_k}^{T} \gamma_t(j)}{\sum_{t=1}^{T} \gamma_t(j)}
 
-Implementation Features
------------------------
+Continuous Observations: GMM-HMM
+--------------------------------
 
-CMLA HMM Implementation
-~~~~~~~~~~~~~~~~~~~~~~~
+For real-valued observation vectors :math:`\mathbf{x}_t \in \mathbb{R}^D`, each state
+emits from a Gaussian mixture with diagonal covariance:
 
-The CMLA HMM class provides:
+.. math::
 
-* **Discrete observations**: Integer-valued observation sequences
-* **All three algorithms**: Forward, Viterbi, and Baum-Welch
-* **Multiple sequence training**: Can train on multiple observation sequences
-* **Numerical stability**: Log-space computations to prevent underflow
+   b_j(\mathbf{x}) = \sum_{k=1}^{K} c_{jk}\,
+   \mathcal{N}\!\left(\mathbf{x};\boldsymbol\mu_{jk},\operatorname{diag}(\boldsymbol\sigma^2_{jk})\right)
 
-Key Methods
-~~~~~~~~~~~
+Forward, backward and Viterbi are unchanged: they only need :math:`b_j(\mathbf{x}_t)`.
+The M-step needs the posterior of each mixture component,
+
+.. math::
+
+   r_t(j,k) = \gamma_t(j)\,
+   \frac{c_{jk}\,\mathcal{N}(\mathbf{x}_t;\boldsymbol\mu_{jk},\boldsymbol\sigma^2_{jk})}{b_j(\mathbf{x}_t)}
+
+and then updates
+
+.. math::
+
+   c_{jk} = \frac{\sum_t r_t(j,k)}{\sum_t \gamma_t(j)}, \qquad
+   \boldsymbol\mu_{jk} = \frac{\sum_t r_t(j,k)\,\mathbf{x}_t}{\sum_t r_t(j,k)}, \qquad
+   \boldsymbol\sigma^2_{jk} = \max\!\left(\frac{\sum_t r_t(j,k)\,\mathbf{x}_t^2}{\sum_t r_t(j,k)}
+   - \boldsymbol\mu_{jk}^2,\ \sigma^2_{\text{floor}}\right)
+
+Gaussian densities can be far below the smallest double for every state at once
+(e.g. an outlier frame). The forward-backward algorithm therefore scales
+:math:`b_j(\mathbf{x}_t)` by :math:`1/\max_j b_j(\mathbf{x}_t)` at each time step; the scale
+cancels in :math:`\gamma` and :math:`\xi` and is added back to :math:`\log P(O|\lambda)`.
+
+EM finds only a local optimum, so initialization matters. ``init_gmm_hmm`` assigns
+frames to states (uniform segmentation for left-to-right models, k-means for ergodic
+models) and runs k-means within each state to place the mixture means.
+
+Implementation
+--------------
+
+Design
+~~~~~~
+
+``HMM`` keeps the initial state probabilities ``init_state`` (M,) and transition
+probabilities ``state_tran`` (M, M). Everything that depends on the observation type is
+in an ``Emission`` object, ``hmm.emission``:
 
 .. list-table::
    :header-rows: 1
 
-   * - Method
+   * - Class
+     - Observation
+     - Parameters
+   * - ``DiscreteEmission``
+     - integer symbols, sequence shape (T,)
+     - ``probs`` (M, K); also accessible as ``hmm.obs_prob``
+   * - ``GMMEmission``
+     - real vectors, sequence shape (T, D)
+     - ``weights`` (M, K), ``means`` (M, K, D), ``covs`` (M, K, D) diagonal variances
+
+See :doc:`../design/gmm_hmm` for the design document.
+
+Key Functions and Methods
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+
+   * - Function / method
      - Purpose
-     - Algorithm
-   * - ``forward()``
-     - Compute observation probability
-     - Forward Algorithm
-   * - ``viterbi()``
-     - Find most likely state sequence
-     - Viterbi Algorithm
-   * - ``train_baum_welch()``
-     - Learn model parameters
-     - Baum-Welch Algorithm
-   * - ``backward()``
-     - Compute backward probabilities
-     - Backward Algorithm
+   * - ``hmm.log_likelihood(x)``
+     - :math:`\log P(O|\lambda)` by the forward algorithm
+   * - ``hmm.viterbi_search(x)``
+     - Most likely state sequence and its log probability
+   * - ``hmm.forward_backward_algorithm_linear(x)``
+     - State posteriors :math:`\gamma`, :math:`\xi` and :math:`\log P(O|\lambda)`
+   * - ``hmm_baum_welch(hmm, seqs, itr_limit)``
+     - Baum-Welch (EM) training
+   * - ``hmm_viterbi_training(hmm, seqs, itr_limit)``
+     - Viterbi (hard EM) training
+   * - ``init_gmm_hmm(hmm, seqs, method)``
+     - Initialize a GMM-HMM from data
+   * - ``hmm.save(file)`` / ``HMM.load(file)``
+     - Save / load model parameters (JSON or pickle)
+   * - ``sampling_from_hmm(lengths, hmm)``
+     - Generate state and observation sequences
 
 Usage Examples
 --------------
 
-Basic HMM Usage
-~~~~~~~~~~~~~~~
+Discrete HMM
+~~~~~~~~~~~~
 
 .. code-block:: python
 
    import numpy as np
-   from cmla.models.hmm import HMM
+   from cmla.models.hmm import HMM, hmm_baum_welch
 
-   # Create HMM with 2 states and 2 observation symbols
-   hmm = HMM(num_states=2, num_observations=2)
+   # 2 states, 2 observation symbols
+   hmm = HMM(2, 2)
+   hmm.init_state = np.array([0.6, 0.4])
+   hmm.state_tran = np.array([[0.7, 0.3], [0.4, 0.6]])
+   hmm.obs_prob = np.array([[0.9, 0.1],   # state 0: likely to emit symbol 0
+                            [0.2, 0.8]])  # state 1: likely to emit symbol 1
 
-   # Define model parameters manually
-   hmm.transition_matrix = np.array([
-       [0.7, 0.3],
-       [0.4, 0.6]
-   ])
-
-   hmm.observation_matrix = np.array([
-       [0.9, 0.1],  # State 0: likely to emit symbol 0
-       [0.2, 0.8]   # State 1: likely to emit symbol 1
-   ])
-
-   hmm.initial_state_probability = np.array([0.6, 0.4])
-
-   # Observation sequence
    observations = [0, 1, 0, 1, 1, 0]
+   print(hmm.log_likelihood(observations))          # log P(O | model)
+   path, log_prob = hmm.viterbi_search(observations)
 
-Forward Algorithm
-~~~~~~~~~~~~~~~~~
+   # Baum-Welch training on several sequences
+   sequences = [[0, 1, 0, 1, 1], [1, 1, 0, 0, 1], [0, 0, 1, 1, 0]]
+   model = HMM(2, 2)                                 # random emission probabilities
+   history = hmm_baum_welch(model, sequences, itr_limit=50, checkpoint_dir=None)
+   print(history["log_likelihood"][-1])
 
-.. code-block:: python
-
-   # Compute probability of observation sequence
-   alpha, prob = hmm.forward(observations)
-   print(f"P(observations|model) = {prob}")
-   print(f"Alpha matrix shape: {alpha.shape}")
-
-Viterbi Algorithm
-~~~~~~~~~~~~~~~~~
+GMM-HMM
+~~~~~~~
 
 .. code-block:: python
 
-   # Find most likely state sequence
-   path, prob = hmm.viterbi(observations)
-   print(f"Most likely path: {path}")
-   print(f"Path probability: {prob}")
+   from cmla.models.hmm import HMM, hmm_baum_welch
+   from cmla.models.hmm_init import init_gmm_hmm
+   from cmla.models.sampler import generate_gmm_hmm_parameter, sampling_from_hmm
 
-Baum-Welch Training
-~~~~~~~~~~~~~~~~~~~
+   # sample from a random 3-state, 2-mixture, 2-D model
+   true_hmm = generate_gmm_hmm_parameter(num_states=3, num_mixtures=2, feature_dim=2)
+   states, sequences = sampling_from_hmm([50] * 30, true_hmm)
+
+   hmm = HMM(3, 2, observation_type="gmm", num_mixtures=2)
+   init_gmm_hmm(hmm, sequences, method="kmeans")    # "uniform_segment" for left-to-right
+   hmm_baum_welch(hmm, sequences, itr_limit=30, checkpoint_dir=None)
+
+   print(hmm.emission.means)                         # (M, K, D)
+   hmm.save("gmm_hmm.json")
+
+Plotting
+~~~~~~~~
 
 .. code-block:: python
 
-   # Generate training data
-   training_sequences = [
-       [0, 1, 0, 1, 1],
-       [1, 1, 0, 0, 1],
-       [0, 0, 1, 1, 0],
-       [1, 0, 1, 0, 1]
-   ]
+   import numpy as np
+   from cmla.plots.hmm_plot import plot_emission
 
-   # Initialize HMM with random parameters
-   hmm_train = HMM(num_states=2, num_observations=2)
-
-   # Train the model
-   log_likelihoods = hmm_train.train_baum_welch(
-       training_sequences,
-       max_iterations=100,
-       tolerance=1e-6
-   )
-
-   print("Final model parameters:")
-   print(f"Transition matrix:\n{hmm_train.transition_matrix}")
-   print(f"Observation matrix:\n{hmm_train.observation_matrix}")
-   print(f"Initial probabilities: {hmm_train.initial_state_probability}")
+   # GMM: ellipses of each Gaussian over the samples, colored by true state
+   fig = plot_emission(hmm, x=np.concatenate(sequences), states=np.concatenate(states))
+   fig.savefig("gmm_hmm.png")
 
 Utility Functions
 ~~~~~~~~~~~~~~~~~
 
-The CMLA models package provides utility functions for HMM parameter randomization:
+``cmla.models.utils`` randomizes the parameters of a discrete HMM in place:
 
-.. code-block:: python
+* ``randomize_state_transition_probabilities(hmm)`` - initial state and transition probabilities
+* ``randomize_observation_probabilities(hmm)`` - observation probability matrix
+* ``randomize_all_probabilities(hmm)`` - all of the above
 
-   from cmla.models.hmm import HMM
-   from cmla.models.utils import (
-       randomize_state_transition_probabilities,
-       randomize_observation_probabilities,
-       randomize_all_probabilities
-   )
-
-   # Create an HMM
-   hmm = HMM(num_states=2, num_observations=3)
-
-   # Randomize state transition probabilities
-   randomize_state_transition_probabilities(hmm)
-
-   # Randomize observation probabilities
-   randomize_observation_probabilities(hmm)
-
-   # Randomize all probabilities at once
-   randomize_all_probabilities(hmm)
-
-Available utility functions:
-
-* ``randomize_state_transition_probabilities(hmm)`` - Randomizes state transition matrix
-* ``randomize_observation_probabilities(hmm)`` - Randomizes observation probability matrix
-* ``randomize_all_probabilities(hmm)`` - Randomizes all HMM parametersCommand-Line Interface
+Command-Line Interface
 ----------------------
-
-The HMM CLI provides access to all three fundamental algorithms:
 
 .. code-block:: bash
 
-   # Train HMM model
-   uv run python scripts/hmm_cli.py --train --data-file observations.txt
+   # generate GMM-HMM samples: model + data (JSON) and sequences (CSV)
+   uv run python -m cmla.scripts.sampler_cli 30 gmm_hmm.json --csv HMM-GMM \
+       --states 3 --mixtures 2 --dimension 2
 
-   # Run Viterbi algorithm
-   uv run python scripts/hmm_cli.py --viterbi --observations "0 1 0 1 1"
+   # train a GMM-HMM
+   uv run python -m cmla.scripts.hmm_cli train --type gmm --states 3 --mixtures 2 \
+       --data-file gmm_hmm.csv --iterations 30 --output model.json
 
-   # Run forward algorithm
-   uv run python scripts/hmm_cli.py --forward --observations "0 1 0 1"
+   # log-likelihood and Viterbi path of each sequence
+   uv run python -m cmla.scripts.hmm_cli forward --model model.json --data-file gmm_hmm.csv
+   uv run python -m cmla.scripts.hmm_cli viterbi --model model.json --data-file gmm_hmm.csv
 
-CLI Options
-~~~~~~~~~~~
+   # discrete HMM
+   uv run python -m cmla.scripts.hmm_cli train --data-file discrete.json --states 2 -o d.json
+   uv run python -m cmla.scripts.hmm_cli viterbi --model d.json --observations "0 1 0 1 1"
 
-.. list-table::
+Data files are either the JSON/pickle output of ``sampler_cli`` or a text file with one
+comma-separated frame per line and a blank line between sequences.
+
+.. list-table:: ``train`` options
    :header-rows: 1
 
    * - Option
      - Description
-   * - ``--train``
-     - Train HMM using Baum-Welch algorithm
-   * - ``--viterbi``
-     - Run Viterbi decoding
-   * - ``--forward``
-     - Run forward algorithm
-   * - ``--model-file, -m``
-     - Load/save HMM model (JSON format)
-   * - ``--observations``
-     - Observation sequence (space-separated)
-   * - ``--data-file, -f``
-     - Input data file
+   * - ``--data-file, -f`` / ``--observations``
+     - Training data / one discrete sequence (space-separated)
+   * - ``--type``
+     - ``discrete`` (default) or ``gmm``
    * - ``--states, -s``
      - Number of hidden states (default: 2)
-
-Advanced Examples
------------------
-
-Multiple Sequence Training
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   # Multiple observation sequences for better training
-   sequences = []
-   for _ in range(10):
-       seq_length = np.random.randint(5, 15)
-       sequence = np.random.choice([0, 1], size=seq_length).tolist()
-       sequences.append(sequence)
-
-   hmm = HMM(num_states=3, num_observations=2)
-   log_likelihoods = hmm.train_baum_welch(sequences, max_iterations=50)
-
-   # Plot training progress
-   import matplotlib.pyplot as plt
-   plt.plot(log_likelihoods)
-   plt.xlabel('Iteration')
-   plt.ylabel('Log-likelihood')
-   plt.title('HMM Training Progress')
-   plt.show()
+   * - ``--symbols``
+     - Number of symbols of a discrete HMM (default: max symbol + 1)
+   * - ``--mixtures``
+     - Gaussians per state of a GMM-HMM (default: 2)
+   * - ``--init``
+     - GMM-HMM initialization, ``kmeans`` (default) or ``uniform_segment``
+   * - ``--algorithm``
+     - ``baum-welch`` (default) or ``viterbi``
+   * - ``--iterations, -n``
+     - Training iterations (default: 20)
+   * - ``--model, -m``
+     - Start from this model instead of a new one
+   * - ``--checkpoint-dir``
+     - Save Baum-Welch checkpoints (default: none)
+   * - ``--output, -o``
+     - Output model file, ``.json`` or ``.pkl``
 
 Model Comparison
 ~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   # Compare models with different numbers of states
-   state_counts = [2, 3, 4, 5]
-   final_likelihoods = []
-
-   for n_states in state_counts:
-       hmm = HMM(num_states=n_states, num_observations=2)
-       log_likes = hmm.train_baum_welch(sequences, max_iterations=30)
-       final_likelihoods.append(log_likes[-1])
-
-   # Plot model comparison
-   plt.bar(state_counts, final_likelihoods)
-   plt.xlabel('Number of States')
-   plt.ylabel('Final Log-likelihood')
-   plt.title('HMM Model Comparison')
-   plt.show()
-
-State Analysis
-~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   # Analyze state transitions
-   transition_matrix = hmm.transition_matrix
-   print("State transition analysis:")
-   for i in range(hmm.num_states):
-       most_likely_next = np.argmax(transition_matrix[i])
-       prob = transition_matrix[i, most_likely_next]
-       print(f"State {i} -> State {most_likely_next} (prob: {prob:.3f})")
-
-   # Analyze observation patterns
-   observation_matrix = hmm.observation_matrix
-   print("\nObservation pattern analysis:")
-   for i in range(hmm.num_states):
-       most_likely_obs = np.argmax(observation_matrix[i])
-       prob = observation_matrix[i, most_likely_obs]
-       print(f"State {i} most likely emits {most_likely_obs} (prob: {prob:.3f})")
+   # Compare models with different numbers of states on held-out data
+   for n_states in [2, 3, 4, 5]:
+       hmm = HMM(n_states, 2, observation_type="gmm", num_mixtures=2)
+       init_gmm_hmm(hmm, train_seqs, method="kmeans")
+       hmm_baum_welch(hmm, train_seqs, itr_limit=30, checkpoint_dir=None)
+       print(n_states, sum(hmm.log_likelihood(x) for x in valid_seqs))
 
 Applications
 ------------
@@ -400,8 +370,14 @@ API Reference
 -------------
 
 .. autoclass:: cmla.models.hmm.HMM
+   :no-index:
    :members:
    :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: cmla.models.emission.GMMEmission
+   :no-index:
+   :members:
    :show-inheritance:
 
 See Also

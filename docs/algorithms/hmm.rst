@@ -290,9 +290,9 @@ Command-Line Interface
    uv run python -m cmla.scripts.sampler_cli 30 gmm_hmm.json --csv HMM-GMM \
        --states 3 --mixtures 2 --dimension 2
 
-   # train a GMM-HMM: 5 iterations of Viterbi training, then 30 of Baum-Welch
+   # train a GMM-HMM (Baum-Welch; --algorithm viterbi for Viterbi training)
    uv run python -m cmla.scripts.hmm_cli train --type gmm --states 3 --mixtures 2 \
-       --data-file gmm_hmm.csv --viterbi-iterations 5 --iterations 30 --output model.json
+       --data-file gmm_hmm.csv --iterations 30 --output model.json
 
    # log-likelihood and Viterbi path of each sequence
    uv run python -m cmla.scripts.hmm_cli forward --model model.json --data-file gmm_hmm.csv
@@ -326,8 +326,6 @@ comma-separated frame per line and a blank line between sequences.
      - ``baum-welch`` (default) or ``viterbi``
    * - ``--iterations, -n``
      - Training iterations (default: 20)
-   * - ``--viterbi-iterations``
-     - Viterbi training iterations run before ``--algorithm`` (default: 0)
    * - ``--verbose, -v`` / ``--quiet, -q``
      - Show all log messages / hide the log-likelihood of each iteration
    * - ``--model, -m``

@@ -193,7 +193,14 @@ def test_plots(gmm_hmm_data, discrete_data, tmp_path):
     assert out_file.exists()
 
 
-def test_train_viterbi_then_baum_welch(gmm_hmm_data, tmp_path, capsys):
+@pytest.mark.parametrize(
+    "algorithm,expected",
+    [
+        ("baum-welch", "Training: Baum-Welch training (forward-backward algorithm), 2"),
+        ("viterbi", "Training: Viterbi training (Viterbi algorithm), 2"),
+    ],
+)
+def test_train_shows_algorithm(gmm_hmm_data, tmp_path, capsys, algorithm, expected):
     hmm_cli.main(
         [
             "train",
@@ -203,22 +210,18 @@ def test_train_viterbi_then_baum_welch(gmm_hmm_data, tmp_path, capsys):
             "2",
             "-f",
             str(gmm_hmm_data.with_suffix(".csv")),
-            "--viterbi-iterations",
-            "2",
+            "--algorithm",
+            algorithm,
             "-n",
-            "3",
+            "2",
             "-o",
             str(tmp_path / "m.json"),
         ]
     )
-    out = capsys.readouterr().out
-    assert "[1/2] Viterbi training" in out
-    assert "[2/2] Baum-Welch training (forward-backward algorithm)" in out
-    assert out.index("[1/2]") < out.index("[2/2]")
-    assert "2 viterbi + 3 baum-welch iterations" in out
+    assert expected in capsys.readouterr().out
 
 
 def test_negative_iterations(capsys):
     with pytest.raises(SystemExit):
-        hmm_cli.main(["train", "-obs", "0 1", "--viterbi-iterations", "-1"])
+        hmm_cli.main(["train", "-obs", "0 1", "-n", "-1"])
     assert ">= 0" in capsys.readouterr().err

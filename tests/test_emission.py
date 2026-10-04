@@ -98,3 +98,11 @@ def test_forward_backward_survives_underflow():
     np.testing.assert_allclose(s1, g1)
     np.testing.assert_allclose(s2, g2)
     assert np.isclose(log_prob_shifted, log_prob + len(obss) * _ShiftedEmission.shift)
+
+
+def test_discrete_rejects_out_of_range_symbols():
+    emission = DiscreteEmission(2, 3)
+    with pytest.raises(ValueError):
+        emission.log_prob([0, 3])
+    with pytest.raises(ValueError):
+        emission.log_prob([-1])

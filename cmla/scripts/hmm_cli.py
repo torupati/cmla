@@ -2,139 +2,245 @@
 """
 Hidden Markov Model (HMM) CLI application.
 
-Example usage:
-    python scripts/hmm_cli.py --train --data-file observations.txt
-    python scripts/hmm_cli.py --viterbi --observations "0 1 0 1"
-    python scripts/hmm_cli.py --help
+Example usage::
+
+    # discrete HMM
+    python -m cmla.scripts.hmm_cli train --data-file hmm.json --states 2 --output model.json
+    python -m cmla.scripts.hmm_cli viterbi --model model.json --observations "0 1 0 1"
+
+    # HMM with Gaussian mixture emission (GMM-HMM)
+    python -m cmla.scripts.hmm_cli train --type gmm --states 3 --mixtures 2 --data-file sequences.csv --output gmm_hmm.json
+    python -m cmla.scripts.hmm_cli forward --model gmm_hmm.json --data-file sequences.csv
+
+Data file formats:
+    .json/.pkl/.pickle  output of sampler_cli ("sample" holds the sequences)
+    other (e.g. .csv)   one frame per line, comma separated; blank line separates sequences
 """
 
 import argparse
 import json
+import logging
+import pickle
 import sys
 from pathlib import Path
 
 import numpy as np
 
-from cmla.models.hmm import HMM
+from cmla.models.emission import DiscreteEmission
+from cmla.models.hmm import HMM, hmm_baum_welch, hmm_viterbi_training
+from cmla.models.hmm_init import init_gmm_hmm
+from cmla.models.sampler import load_sequences_with_blank
 
 
-def main():
-    """Main CLI entry point."""
+def load_sequences(args, observation_type: str) -> list[np.ndarray]:
+    """Read observation sequences from --observations or --data-file.
+
+    Args:
+        args: parsed arguments
+        observation_type (str): "discrete" or "gmm"
+
+    Returns:
+        list[np.ndarray]: (T,) int arrays for discrete, (T, D) float arrays for gmm
+    """
+    if args.observations:
+        if observation_type != "discrete":
+            raise ValueError("--observations is only for discrete HMM")
+        return [np.array(args.observations.split(), dtype=int)]
+    if args.data_file is None:
+        raise ValueError("specify --data-file or --observations")
+
+    suffix = args.data_file.suffix.lower()
+    if suffix == ".json":
+        with open(args.data_file, encoding="utf-8") as f:
+            raw = json.load(f)["sample"]
+    elif suffix in (".pkl", ".pickle"):
+        with open(args.data_file, "rb") as f:
+            raw = pickle.load(f)["sample"]
+    else:
+        raw = load_sequences_with_blank(str(args.data_file))
+
+    if observation_type == "discrete":
+        seqs = [np.asarray(x).reshape(-1) for x in raw]
+        if any(not np.array_equal(x, np.round(x)) for x in seqs):
+            raise ValueError("discrete HMM requires integer observations")
+        return [x.astype(int) for x in seqs]
+    seqs = [np.asarray(x, dtype=float) for x in raw]
+    return [x.reshape(len(x), -1) for x in seqs]
+
+
+def observation_type_of(hmm: HMM) -> str:
+    return "discrete" if isinstance(hmm.emission, DiscreteEmission) else "gmm"
+
+
+def train(args):
+    """Train an HMM and save it."""
+    np.random.seed(args.seed)
+    if args.model:
+        hmm = HMM.load(str(args.model))
+        seqs = load_sequences(args, observation_type_of(hmm))
+        print(f"Loaded initial model from {args.model}")
+    else:
+        seqs = load_sequences(args, args.type)
+        if args.type == "discrete":
+            num_symbols = args.symbols or int(max(x.max() for x in seqs)) + 1
+            hmm = HMM(args.states, num_symbols)
+        else:
+            feature_dim = seqs[0].shape[1]
+            hmm = HMM(
+                args.states,
+                feature_dim,
+                observation_type="gmm",
+                num_mixtures=args.mixtures,
+            )
+            init_gmm_hmm(hmm, seqs, method=args.init)
+    print(
+        f"Model: {hmm.emission} ({len(seqs)} sequences, {sum(map(len, seqs))} frames)"
+    )
+
+    if args.algorithm == "baum-welch":
+        history = hmm_baum_welch(
+            hmm, seqs, itr_limit=args.iterations, checkpoint_dir=args.checkpoint_dir
+        )
+        final = history["log_likelihood"][-1] / len(seqs)
+    else:
+        history = hmm_viterbi_training(hmm, seqs, itr_limit=args.iterations)
+        final = history["log_likelihood"][-1]
+    # likelihood of the last iteration is computed with the parameters before update
+    print(f"Training completed: {args.iterations} iterations, E[log P(X)]={final:.4f}")
+
+    hmm.save(str(args.output))
+    print(f"Model saved to {args.output}")
+
+
+def viterbi(args):
+    """Most likely state sequence of each observation sequence."""
+    hmm = HMM.load(str(args.model))
+    seqs = load_sequences(args, observation_type_of(hmm))
+    results = []
+    for i, x in enumerate(seqs):
+        path, log_prob = hmm.viterbi_search(x)
+        path = [int(s) for s in path]
+        results.append({"path": path, "log_prob": float(log_prob)})
+        print(f"seq {i}: log P(X, S*)={log_prob:.4f} path={' '.join(map(str, path))}")
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(results, f, indent=2)
+        print(f"Results saved to {args.output}")
+
+
+def forward(args):
+    """Log-likelihood of each observation sequence."""
+    hmm = HMM.load(str(args.model))
+    seqs = load_sequences(args, observation_type_of(hmm))
+    log_probs = [hmm.log_likelihood(x) for x in seqs]
+    for i, (x, ll) in enumerate(zip(seqs, log_probs)):
+        print(f"seq {i}: T={len(x)} log P(X)={ll:.4f}")
+    total = float(np.sum(log_probs))
+    print(f"total log P(X)={total:.4f}, per frame={total / sum(map(len, seqs)):.4f}")
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump({"log_prob": log_probs, "total": total}, f, indent=2)
+        print(f"Results saved to {args.output}")
+
+
+def add_data_arguments(parser):
+    parser.add_argument("--data-file", "-f", type=Path, help="Input data file")
+    parser.add_argument(
+        "--observations",
+        "-obs",
+        type=str,
+        help="One discrete observation sequence (space-separated integers)",
+    )
+
+
+def create_parser():
+    """Create and return the argument parser"""
     parser = argparse.ArgumentParser(
         description="Hidden Markov Model analysis tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-
-    # Mode selection
-    mode_group = parser.add_mutually_exclusive_group(required=True)
-    mode_group.add_argument("--train", action="store_true", help="Train HMM model")
-    mode_group.add_argument(
-        "--viterbi", action="store_true", help="Run Viterbi algorithm"
-    )
-    mode_group.add_argument(
-        "--forward", action="store_true", help="Run forward algorithm"
-    )
-
-    # Common arguments
     parser.add_argument(
-        "--model-file", "-m", type=Path, help="HMM model file (JSON format)"
+        "--verbose", "-v", action="store_true", help="Show progress of training"
     )
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    parser.add_argument("--data-file", "-f", type=Path, help="Input data file")
-
-    parser.add_argument(
-        "--observations",
-        "-obs",
-        type=str,
-        help="Observation sequence (space-separated integers)",
+    train_parser = subparsers.add_parser("train", help="Train HMM model")
+    add_data_arguments(train_parser)
+    train_parser.add_argument(
+        "--model", "-m", type=Path, help="Initial model (otherwise created from data)"
     )
-
-    parser.add_argument(
-        "--states",
-        "-s",
+    train_parser.add_argument(
+        "--type",
+        choices=["discrete", "gmm"],
+        default="discrete",
+        help="Emission type of a new model (default: discrete)",
+    )
+    train_parser.add_argument(
+        "--states", "-s", type=int, default=2, help="Number of hidden states"
+    )
+    train_parser.add_argument(
+        "--symbols",
         type=int,
-        default=2,
-        help="Number of hidden states (default: 2)",
+        help="Number of observation symbols (discrete). Default: max symbol + 1",
     )
+    train_parser.add_argument(
+        "--mixtures", type=int, default=2, help="Number of Gaussians per state (gmm)"
+    )
+    train_parser.add_argument(
+        "--init",
+        choices=["kmeans", "uniform_segment"],
+        default="kmeans",
+        help="Initialization of a new GMM-HMM (default: kmeans)",
+    )
+    train_parser.add_argument(
+        "--algorithm",
+        choices=["baum-welch", "viterbi"],
+        default="baum-welch",
+        help="Training algorithm (default: baum-welch)",
+    )
+    train_parser.add_argument(
+        "--iterations", "-n", type=int, default=20, help="Training iterations"
+    )
+    train_parser.add_argument(
+        "--checkpoint-dir", type=Path, help="Save Baum-Welch checkpoints here"
+    )
+    train_parser.add_argument("--seed", type=int, default=0, help="Random seed")
+    train_parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=Path("trained_hmm_model.json"),
+        help="Output model file (.json or .pkl)",
+    )
+    train_parser.set_defaults(func=train)
 
-    parser.add_argument("--output", "-o", type=Path, help="Output file for results")
-
-    args = parser.parse_args()
-
-    # Load or create HMM model
-    if args.model_file and args.model_file.exists():
-        print(f"Loading HMM model from {args.model_file}")
-        with open(args.model_file, "r") as f:
-            model_data = json.load(f)
-        hmm = HMM(
-            num_states=len(model_data["transition_matrix"]),
-            num_observations=len(model_data["observation_matrix"][0]),
+    for name, func, help_text in [
+        ("viterbi", viterbi, "Most likely state sequence (Viterbi algorithm)"),
+        ("forward", forward, "Log-likelihood of sequences (forward algorithm)"),
+    ]:
+        sub = subparsers.add_parser(name, help=help_text)
+        sub.add_argument(
+            "--model", "-m", type=Path, required=True, help="HMM model file"
         )
-        hmm.transition_matrix = np.array(model_data["transition_matrix"])
-        hmm.observation_matrix = np.array(model_data["observation_matrix"])
-        hmm.initial_state_probability = np.array(
-            model_data["initial_state_probability"]
-        )
-    else:
-        print(f"Creating new HMM model with {args.states} states")
-        # Create a simple HMM for demonstration
-        hmm = HMM(num_states=args.states, num_observations=2)
-        # Initialize with random parameters
-        hmm.transition_matrix = np.random.rand(args.states, args.states)
-        hmm.transition_matrix = hmm.transition_matrix / hmm.transition_matrix.sum(
-            axis=1, keepdims=True
-        )
-        hmm.observation_matrix = np.random.rand(args.states, 2)
-        hmm.observation_matrix = hmm.observation_matrix / hmm.observation_matrix.sum(
-            axis=1, keepdims=True
-        )
-        hmm.initial_state_probability = np.ones(args.states) / args.states
+        add_data_arguments(sub)
+        sub.add_argument("--output", "-o", type=Path, help="Output file (JSON)")
+        sub.set_defaults(func=func)
+    return parser
 
-    # Get observations
-    if args.observations:
-        observations = list(map(int, args.observations.split()))
-    elif args.data_file and args.data_file.exists():
-        observations = np.loadtxt(args.data_file, dtype=int).tolist()
-    else:
-        print("Error: Please specify --observations or --data-file", file=sys.stderr)
-        sys.exit(1)
 
-    print(f"Observations: {observations}")
-
-    # Execute requested operation
+def main(argv=None):
+    """Main CLI entry point."""
+    parser = create_parser()
+    args = parser.parse_args(argv)
+    logging.basicConfig(
+        level=logging.INFO if args.verbose else logging.WARNING,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
     try:
-        if args.train:
-            print("Training HMM model...")
-            hmm.train_baum_welch([observations], max_iterations=100)
-            print("Training completed!")
-
-            # Save trained model
-            model_data = {
-                "transition_matrix": hmm.transition_matrix.tolist(),
-                "observation_matrix": hmm.observation_matrix.tolist(),
-                "initial_state_probability": hmm.initial_state_probability.tolist(),
-            }
-
-            output_file = args.output or Path("trained_hmm_model.json")
-            with open(output_file, "w") as f:
-                json.dump(model_data, f, indent=2)
-            print(f"Model saved to {output_file}")
-
-        elif args.viterbi:
-            print("Running Viterbi algorithm...")
-            path, prob = hmm.viterbi(observations)
-            print(f"Most likely state sequence: {path}")
-            print(f"Probability: {prob}")
-
-        elif args.forward:
-            print("Running forward algorithm...")
-            alpha, prob = hmm.forward(observations)
-            print(f"Forward probability: {prob}")
-            print(f"Alpha matrix shape: {alpha.shape}")
-
-    except Exception as e:
-        print(f"Error during operation: {e}", file=sys.stderr)
+        args.func(args)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

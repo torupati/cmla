@@ -96,15 +96,26 @@ class DiscreteEmission(Emission):
         return self.probs.shape[1]
 
     def log_prob(self, obss) -> np.ndarray:
+        x = self._symbols(obss)
         with np.errstate(divide="ignore"):
-            return np.log(self.probs[:, np.asarray(obss, dtype=int)].T)
+            return np.log(self.probs[:, x].T)
+
+    def _symbols(self, obss) -> np.ndarray:
+        """Observation as int array, checking 0 <= x < num_symbols."""
+        x = np.asarray(obss, dtype=int)
+        if x.size and (x.min() < 0 or x.max() >= self.num_symbols):
+            raise ValueError(
+                f"observation symbols must be in [0, {self.num_symbols - 1}]. "
+                f"got [{x.min()}, {x.max()}]"
+            )
+        return x
 
     def reset_stats(self) -> None:
         self._count = np.zeros(self.probs.shape)
 
     def accumulate(self, obss, gamma: np.ndarray) -> None:
         # count[j, x[t]] += gamma[t, j]
-        np.add.at(self._count.T, np.asarray(obss, dtype=int), gamma)
+        np.add.at(self._count.T, self._symbols(obss), gamma)
 
     def update(self) -> None:
         for m in range(self.num_states):

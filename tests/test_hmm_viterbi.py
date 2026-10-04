@@ -32,7 +32,7 @@ def test_viterbi_search():
     st, ll = hmm.viterbi_search(obs[0])
     print("st (", len(st), ")= ", st)
     for i, (_x, _s) in enumerate(zip(obs[0], st)):
-        print(f"t={i} s={_s} s_true={st_orig[i]} x={_x}")
+        print(f"t={i} s={_s} s_true={st_orig[0][i]} x={_x}")
 
 
 def test_viterbi_search2():
@@ -56,7 +56,7 @@ def test_viterbi_search2():
         st_orig, obs = sampling_from_hmm([200], hmm)
         st, ll = hmm.viterbi_search(obs[0])
         print("idx   org  est")
-        for _i, (s0, s1, o) in enumerate(zip(st_orig, st, obs[0])):
+        for _i, (s0, s1, o) in enumerate(zip(st_orig[0], st, obs[0])):
             print(f"i={_i:03d} {s0}    {s1}  o={o}")
             if s0 == s1:
                 counts += 1

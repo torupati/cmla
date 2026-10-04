@@ -8,7 +8,6 @@ import numpy as np
 from cmla.plots.kmeans_plot import plot_data_with_centroid
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 
 class KmeansCluster:

@@ -1,6 +1,7 @@
 import logging
 import numpy as np
 
+from cmla.models.emission import GMMEmission
 from cmla.models.hmm import HMM
 
 logger = logging.getLogger(__name__)
@@ -182,19 +183,63 @@ def sampling_from_hmm(sequence_lengths, hmm: HMM):
     """sample HMM output and its hidden states from given parameters
 
     Args:
-        n_sequence (int): number of sequences to be generated
+        sequence_lengths (list[int]): length of each sequence to be generated
         hmm (HMM): Hidden Markov Model instance
+
+    Returns:
+        states (list): hidden state sequence of each generated sequence
+        out (list): observation sequence of each generated sequence
     """
-    out = []
+    states, out = [], []
     for _l in sequence_lengths:
-        states = sample_markov_process(_l, hmm.init_state, hmm.state_tran)
+        st = sample_markov_process(_l, hmm.init_state, hmm.state_tran)
         obs = []
-        for s_t in states:
+        for s_t in st:
             # sample x from p(x|s[t])
             x = hmm.emission.sample(s_t)
             obs.append(x)
+        states.append(st)
         out.append(obs)
     return states, out
+
+
+def generate_gmm_hmm_parameter(
+    num_states: int = 3,
+    num_mixtures: int = 2,
+    feature_dim: int = 2,
+    self_loop: float = 0.8,
+) -> HMM:
+    """Generate a random GMM-HMM (diagonal covariance) for sampling.
+
+    State centers are spread with standard deviation 5, mixture means are
+    placed around their state center with standard deviation 1.5.
+
+    Args:
+        num_states (int): number of hidden states
+        num_mixtures (int): number of Gaussians per state
+        feature_dim (int): dimension of observation vector
+        self_loop (float): probability of staying in the same state.
+            The rest is divided equally among other states.
+
+    Returns:
+        HMM: generated model
+    """
+    emission = GMMEmission(num_states, num_mixtures, feature_dim)
+    centers = 5.0 * np.random.randn(num_states, 1, feature_dim)
+    emission.means = centers + 1.5 * np.random.randn(
+        num_states, num_mixtures, feature_dim
+    )
+    emission.covs = np.random.uniform(
+        0.2, 0.8, size=(num_states, num_mixtures, feature_dim)
+    )
+    emission.weights = np.random.dirichlet(5.0 * np.ones(num_mixtures), num_states)
+    hmm = HMM(num_states, emission=emission)
+    if num_states > 1:
+        hmm.state_tran = np.full(
+            (num_states, num_states), (1.0 - self_loop) / (num_states - 1)
+        )
+        np.fill_diagonal(hmm.state_tran, self_loop)
+    return hmm
 
 
 def save_sequences_with_blank(filename: str, sequences: list[np.ndarray]):

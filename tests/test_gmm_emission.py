@@ -28,7 +28,7 @@ def _sample(hmm, num_seqs, length):
     for _ in range(num_seqs):
         st, x = sampling_from_hmm([length], hmm)
         seqs.append(np.array(x[0]))
-        states.append(np.array(st))
+        states.append(np.array(st[0]))
     return seqs, states
 
 

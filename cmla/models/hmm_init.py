@@ -34,10 +34,12 @@ def init_gmm_hmm(
     """Initialize weights, means and variances of a GMM-HMM from data (flat start).
 
     1. Assign every frame to a state.
+
        - "uniform_segment": split each sequence into M equal segments, segment j
          to state j. Suits left-to-right models.
        - "kmeans": k-means with M clusters over all frames, cluster j to state j.
          Suits ergodic models.
+
     2. For each state, k-means with K clusters over its frames gives the means.
        Weights and variances are computed from the k-means assignment.
 

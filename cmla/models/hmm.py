@@ -274,27 +274,49 @@ class HMM:
         """
         return np.exp(self.emission.log_prob(obss))
 
-    def forward_backward_algorithm_linear(self, obss):
-        """Push training sequence to get probability of latent varialble condition by input.
+    def _scaled_forward(self, obss):
+        """Forward algorithm with emission probabilities scaled at each time step.
 
-        Args:
-            obss (List[int]): _description_
-        Returns: Probability of latent state.
-            gamma_1: g(t,s) = P(S[t]=s|X)
-            gamma_1: g(t,s,s') = P(S[t]=s,S[t+1]=s'|X)
+        b_j(x[t]) is scaled by 1/max_j b_j(x[t]) so that densities do not underflow.
+        The scale cancels in alpha, gamma and xi, and is added back to log P(X).
+
+        Returns:
+            obsprob (np.ndarray): (T, M) scaled emission probabilities
+            alpha (np.ndarray): (T, M) forward variable
+            alpha_scale (np.ndarray): (T,) scaling factor
+            log_prob (float): log P(X)
         """
-        T = len(obss)
-        # Scale b_j(x[t]) by 1/max_j b_j(x[t]) at each t so that densities do not
-        # underflow. The scale cancels in gamma and xi, and is added back to log P(X).
         _log_obsprob = self.emission.log_prob(obss)
         _log_offset = _log_obsprob.max(axis=1, keepdims=True)
         _log_offset[~np.isfinite(_log_offset)] = 0.0
         _obsprob = np.exp(_log_obsprob - _log_offset)
         _alpha, _alpha_scale = self.forward_algorithm(_obsprob)
+        _log_prob = _log_offset.sum() + np.log(_alpha_scale).sum()
+        return _obsprob, _alpha, _alpha_scale, _log_prob
 
-        _log_prob = _log_offset.sum()
-        for t in range(T):
-            _log_prob += np.log(_alpha_scale[t])  # sum_s log P(x[1:T],s[T]=s)
+    def log_likelihood(self, obss) -> float:
+        """Log-likelihood log P(X) of an observation sequence (forward algorithm).
+
+        Args:
+            obss: observation sequence
+
+        Returns:
+            float: log P(X)
+        """
+        return float(self._scaled_forward(obss)[3])
+
+    def forward_backward_algorithm_linear(self, obss):
+        """Push training sequence to get probability of latent varialble condition by input.
+
+        Args:
+            obss: observation sequence
+        Returns: Probability of latent state.
+            gamma_1: g(t,s) = P(S[t]=s|X)
+            gamma_2: g(t,s,s') = P(S[t]=s,S[t+1]=s'|X)
+            log_prob: log P(X)
+        """
+        T = len(obss)
+        _obsprob, _alpha, _alpha_scale, _log_prob = self._scaled_forward(obss)
         self._training_total_log_likelihood += _log_prob
         # print('alpha=', _alpha)
 
@@ -424,6 +446,55 @@ class HMM:
             )
         return hmm
 
+    def save(self, out_file: str):
+        """Save model parameters (to_dict()) to a JSON or pickle file.
+
+        Args:
+            out_file (str): output file name (.json, or .pkl/.pickle)
+        """
+        file_ext = path.splitext(out_file)[1].lower()
+        if file_ext in [".pkl", ".pickle"]:
+            with open(out_file, "wb") as f:
+                pickle.dump(self.to_dict(), f)
+        elif file_ext == ".json":
+            with open(out_file, "w", encoding="utf-8") as f:
+                json.dump(self.to_dict(), f, indent=2)
+        else:
+            raise ValueError(
+                f"Unsupported file extension: {file_ext}. Use .pkl, .pickle, or .json"
+            )
+
+    @classmethod
+    def load(cls, in_file: str) -> "HMM":
+        """Load model parameters from a JSON or pickle file.
+
+        Accepts files written by save(), save_hmm_and_data() ("model_param")
+        and hmm_baum_welch checkpoints ("model").
+
+        Args:
+            in_file (str): input file name (.json, or .pkl/.pickle/.ckpt)
+
+        Returns:
+            HMM: loaded model
+        """
+        file_ext = path.splitext(in_file)[1].lower()
+        if file_ext in [".pkl", ".pickle", ".ckpt"]:
+            with open(in_file, "rb") as f:
+                data = pickle.load(f)
+        elif file_ext == ".json":
+            with open(in_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            raise ValueError(
+                f"Unsupported file extension: {file_ext}. "
+                "Use .json, .pkl, .pickle or .ckpt"
+            )
+        for key in ("model_param", "model"):
+            if key in data:
+                data = data[key]
+                break
+        return cls.from_dict(data)
+
     def save_hmm_and_data(self, out_file: str, x, st):
         """Save HMM model and data to pickle or JSON file based on file extension.
         Args:
@@ -508,19 +579,27 @@ def hmm_viterbi_training(hmm, obss_seqs, itr_limit: int = 10) -> dict:
     return training_history
 
 
-def hmm_baum_welch(hmm, obss_seqs, itr_limit: int = 100) -> dict:
+def hmm_baum_welch(
+    hmm,
+    obss_seqs,
+    itr_limit: int = 100,
+    checkpoint_dir: str | None = "models/checkpoints/",
+    checkpoint_interval: int = 30,
+) -> dict:
     """HMM training using EM algorithm.
 
     Args:
         hmm (HMM): HMM parameter
         obss_seqs (list[np.ndarray]): observation sequences
         itr_limit (int): maximum iteration number
+        checkpoint_dir (str | None): directory to save checkpoints. None disables.
+        checkpoint_interval (int): save a checkpoint every this many iterations
     Returns:
         dict: training history
     """
     itr_count = 0
-    _save_model = True
-    outdir = "models/checkpoints/"
+    _save_model = checkpoint_dir is not None
+    outdir = checkpoint_dir
     if _save_model:
         makedirs(outdir, exist_ok=True)
     ll_history = {
@@ -537,7 +616,7 @@ def hmm_baum_welch(hmm, obss_seqs, itr_limit: int = 100) -> dict:
             hmm.push_sufficient_statistics(x, _gamma, _xi)
             total_obs_num += len(x)
         total_likelihood = hmm.update_parameters()
-        print(
+        logger.info(
             "itr {} E[logP(X)]={}".format(itr_count, total_likelihood / len(obss_seqs))
         )
         ll_history["step"].append(itr_count)
@@ -545,7 +624,7 @@ def hmm_baum_welch(hmm, obss_seqs, itr_limit: int = 100) -> dict:
         ll_history["total_obs_num"].append(total_obs_num)
         ll_history["total_seq_num"].append(len(obss_seqs))
         # save model
-        if _save_model and itr_count % 30 == 0:
+        if _save_model and itr_count % checkpoint_interval == 0:
             ckpt_file = path.join(outdir, f"hmm_checkpoint_{itr_count:06d}.ckpt")
             with open(ckpt_file, "wb") as f:
                 pickle.dump(
@@ -559,7 +638,7 @@ def hmm_baum_welch(hmm, obss_seqs, itr_limit: int = 100) -> dict:
                     },
                     f,
                 )
-                print(ckpt_file)
+                logger.info("save checkpoint: %s", ckpt_file)
 
         # print('------ after Baum welch trianing ------')
         if itr_count > 0:

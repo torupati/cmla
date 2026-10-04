@@ -121,3 +121,35 @@ def test_emission_object_roundtrip():
     hmm = HMM(3, emission=emission)
     restored = HMM.from_dict(json.loads(json.dumps(hmm.to_dict())))
     np.testing.assert_allclose(restored.emission.probs, emission.probs)
+
+
+@pytest.mark.parametrize("ext", [".json", ".pkl"])
+def test_model_save_load(tmp_path, ext):
+    hmm = _discrete_hmm()
+    out_file = tmp_path / f"model{ext}"
+    hmm.save(str(out_file))
+    _assert_same_hmm(HMM.load(str(out_file)), hmm)
+
+
+def test_load_accepts_data_file(tmp_path):
+    hmm = _discrete_hmm()
+    out_file = tmp_path / "data.json"
+    hmm.save_hmm_and_data(str(out_file), [[0, 1]], [0, 1])
+    _assert_same_hmm(HMM.load(str(out_file)), hmm)
+
+
+def test_log_likelihood_matches_forward_backward():
+    hmm = _discrete_hmm()
+    obss = [0, 1, 2, 2, 1]
+    _, _, log_prob = hmm.forward_backward_algorithm_linear(obss)
+    assert np.isclose(hmm.log_likelihood(obss), log_prob)
+    # brute force: sum over all state sequences
+    import itertools
+
+    total = 0.0
+    for path in itertools.product(range(2), repeat=len(obss)):
+        p = hmm.init_state[path[0]] * hmm.obs_prob[path[0], obss[0]]
+        for t in range(1, len(obss)):
+            p *= hmm.state_tran[path[t - 1], path[t]] * hmm.obs_prob[path[t], obss[t]]
+        total += p
+    assert np.isclose(hmm.log_likelihood(obss), np.log(total))

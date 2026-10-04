@@ -72,6 +72,61 @@ def observation_type_of(hmm: HMM) -> str:
     return "discrete" if isinstance(hmm.emission, DiscreteEmission) else "gmm"
 
 
+logger = logging.getLogger("cmla.scripts.hmm_cli")  # also when run as __main__
+
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def report(message: str):
+    """Print a result line to stdout and record it in the log file."""
+    print(message, flush=True)  # flush: keep order with log messages on stderr
+    logger.info(message)
+
+
+class _ConsoleFilter(logging.Filter):
+    """Select log records shown in the terminal.
+
+    Messages of this CLI are already printed by report(), so they are left out.
+    Default: training progress of cmla.models.hmm and warnings.
+    --verbose: all messages. --quiet: warnings only.
+    """
+
+    def __init__(self, verbose: bool, quiet: bool):
+        super().__init__()
+        self.verbose = verbose
+        self.quiet = quiet
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name == logger.name:
+            return False
+        if self.verbose or record.levelno >= logging.WARNING:
+            return True
+        return not self.quiet and record.name == "cmla.models.hmm"
+
+
+def setup_logging(args) -> list[logging.Handler]:
+    """Log to the terminal (stderr) and, unless disabled, to a file (appended).
+
+    Returns:
+        list[logging.Handler]: handlers added to the root logger
+    """
+    console = logging.StreamHandler()
+    console.addFilter(_ConsoleFilter(args.verbose, args.quiet))
+    console.setFormatter(
+        logging.Formatter(LOG_FORMAT if args.verbose else "%(message)s")
+    )
+    handlers = [console]
+    if args.log_file:
+        file_handler = logging.FileHandler(args.log_file, encoding="utf-8")
+        file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        handlers.append(file_handler)
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    for handler in handlers:
+        root.addHandler(handler)
+    return handlers
+
+
 ALGORITHM_NAMES = {
     "baum-welch": "Baum-Welch training (forward-backward algorithm)",
     "viterbi": "Viterbi training (Viterbi algorithm)",
@@ -86,7 +141,7 @@ def train(args):
     if args.model:
         hmm = HMM.load(str(args.model))
         seqs = load_sequences(args, observation_type_of(hmm))
-        print(f"Loaded initial model from {args.model}")
+        report(f"Loaded initial model from {args.model}")
     else:
         seqs = load_sequences(args, args.type)
         if args.type == "discrete":
@@ -101,15 +156,11 @@ def train(args):
                 num_mixtures=args.mixtures,
             )
             init_gmm_hmm(hmm, seqs, method=args.init)
-    print(
-        f"Model: {hmm.emission} ({len(seqs)} sequences, {sum(map(len, seqs))} frames)",
-        flush=True,  # before log messages on stderr
+    report(
+        f"Model: {hmm.emission} ({len(seqs)} sequences, {sum(map(len, seqs))} frames)"
     )
 
-    print(
-        f"Training: {ALGORITHM_NAMES[args.algorithm]}, {args.iterations} iterations",
-        flush=True,
-    )
+    report(f"Training: {ALGORITHM_NAMES[args.algorithm]}, {args.iterations} iterations")
     if args.algorithm == "baum-welch":
         hmm_baum_welch(
             hmm, seqs, itr_limit=args.iterations, checkpoint_dir=args.checkpoint_dir
@@ -119,14 +170,14 @@ def train(args):
 
     # per-iteration values are computed before each update; evaluate the final model
     total = sum(hmm.log_likelihood(x) for x in seqs)
-    print(
+    report(
         f"Training completed: {args.iterations} iterations, "
         f"E[log P(X)] = {total / len(seqs):.4f} per sequence, "
         f"{total / sum(map(len, seqs)):.4f} per frame"
     )
 
     hmm.save(str(args.output))
-    print(f"Model saved to {args.output}")
+    report(f"Model saved to {args.output}")
 
 
 def viterbi(args):
@@ -138,11 +189,11 @@ def viterbi(args):
         path, log_prob = hmm.viterbi_search(x)
         path = [int(s) for s in path]
         results.append({"path": path, "log_prob": float(log_prob)})
-        print(f"seq {i}: log P(X, S*)={log_prob:.4f} path={' '.join(map(str, path))}")
+        report(f"seq {i}: log P(X, S*)={log_prob:.4f} path={' '.join(map(str, path))}")
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
-        print(f"Results saved to {args.output}")
+        report(f"Results saved to {args.output}")
 
 
 def forward(args):
@@ -151,13 +202,13 @@ def forward(args):
     seqs = load_sequences(args, observation_type_of(hmm))
     log_probs = [hmm.log_likelihood(x) for x in seqs]
     for i, (x, ll) in enumerate(zip(seqs, log_probs)):
-        print(f"seq {i}: T={len(x)} log P(X)={ll:.4f}")
+        report(f"seq {i}: T={len(x)} log P(X)={ll:.4f}")
     total = float(np.sum(log_probs))
-    print(f"total log P(X)={total:.4f}, per frame={total / sum(map(len, seqs)):.4f}")
+    report(f"total log P(X)={total:.4f}, per frame={total / sum(map(len, seqs)):.4f}")
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump({"log_prob": log_probs, "total": total}, f, indent=2)
-        print(f"Results saved to {args.output}")
+        report(f"Results saved to {args.output}")
 
 
 def add_data_arguments(parser):
@@ -188,6 +239,12 @@ def create_parser():
         "-q",
         action="store_true",
         help="Do not show log-likelihood of each training iteration",
+    )
+    log_options.add_argument(
+        "--log-file",
+        default="hmm_cli.log",
+        help="Append log messages to this file (default: hmm_cli.log). "
+        "Empty string disables.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -261,19 +318,21 @@ def main(argv=None):
     """Main CLI entry point."""
     parser = create_parser()
     args = parser.parse_args(argv)
-    if args.verbose:
-        logging.basicConfig(
-            level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
-        )
-    else:
-        logging.basicConfig(level=logging.WARNING, format="%(message)s")
-        if not args.quiet:  # training progress of HMM only
-            logging.getLogger("cmla.models.hmm").setLevel(logging.INFO)
+    root = logging.getLogger()
+    root_level = root.level
+    handlers = setup_logging(args)
+    logger.info("command: hmm_cli %s", " ".join(sys.argv[1:] if argv is None else argv))
     try:
         args.func(args)
     except (OSError, ValueError, KeyError, TypeError) as e:
         print(f"Error: {e}", file=sys.stderr)
+        logger.error("%s", e)
         sys.exit(1)
+    finally:
+        for handler in handlers:
+            root.removeHandler(handler)
+            handler.close()
+        root.setLevel(root_level)
 
 
 if __name__ == "__main__":

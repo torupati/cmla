@@ -14,6 +14,12 @@ from cmla.scripts.sampler_cli import create_parser as create_sampler_parser
 matplotlib.use("Agg")
 
 
+@pytest.fixture(autouse=True)
+def _run_in_tmp_path(tmp_path, monkeypatch):
+    """hmm_cli writes hmm_cli.log to the current directory."""
+    monkeypatch.chdir(tmp_path)
+
+
 @pytest.fixture
 def gmm_hmm_data(tmp_path):
     """GMM-HMM sample written by `sampler_cli N out.json --csv HMM-GMM`."""
@@ -225,3 +231,53 @@ def test_negative_iterations(capsys):
     with pytest.raises(SystemExit):
         hmm_cli.main(["train", "-obs", "0 1", "-n", "-1"])
     assert ">= 0" in capsys.readouterr().err
+
+
+def test_log_file(gmm_hmm_data, tmp_path, capsys):
+    argv = [
+        "train",
+        "--type",
+        "gmm",
+        "--states",
+        "2",
+        "-f",
+        str(gmm_hmm_data),
+        "-n",
+        "2",
+    ]
+    hmm_cli.main(argv + ["-o", str(tmp_path / "m.json")])
+    out = capsys.readouterr()
+    log = (tmp_path / "hmm_cli.log").read_text()
+    assert "command: hmm_cli train" in log
+    assert "cmla.models.hmm: iteration 1:" in log
+    assert "cmla.models.hmm_init" in log  # file has all INFO messages
+    assert "cmla.scripts.hmm_cli: Model saved to" in log
+    assert "cmla.models.hmm_init" not in out.err  # terminal shows progress only
+    assert "iteration 1:" in out.err
+
+    # appended; -q affects the terminal only; custom path
+    hmm_cli.main(argv + ["-o", str(tmp_path / "m.json"), "-q"])
+    assert "iteration" not in capsys.readouterr().err
+    assert (tmp_path / "hmm_cli.log").read_text().count("command: hmm_cli") == 2
+    hmm_cli.main(
+        [
+            "forward",
+            "-m",
+            str(gmm_hmm_data),
+            "-f",
+            str(gmm_hmm_data),
+            "--log-file",
+            "x.log",
+        ]
+    )
+    assert "command: hmm_cli forward" in (tmp_path / "x.log").read_text()
+
+
+def test_log_file_records_error_and_can_be_disabled(tmp_path):
+    with pytest.raises(SystemExit):
+        hmm_cli.main(["forward", "-m", "missing.json", "-obs", "0"])
+    assert "ERROR cmla.scripts.hmm_cli" in (tmp_path / "hmm_cli.log").read_text()
+    (tmp_path / "hmm_cli.log").unlink()
+    with pytest.raises(SystemExit):
+        hmm_cli.main(["forward", "-m", "missing.json", "-obs", "0", "--log-file", ""])
+    assert not (tmp_path / "hmm_cli.log").exists()

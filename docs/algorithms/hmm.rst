@@ -328,6 +328,9 @@ comma-separated frame per line and a blank line between sequences.
      - Training iterations (default: 20)
    * - ``--verbose, -v`` / ``--quiet, -q``
      - Show all log messages / hide the log-likelihood of each iteration
+   * - ``--log-file``
+     - Append all log messages with timestamps to this file
+       (default: ``hmm_cli.log``; ``""`` disables). Also accepted by ``viterbi`` and ``forward``.
    * - ``--model, -m``
      - Start from this model instead of a new one
    * - ``--checkpoint-dir``

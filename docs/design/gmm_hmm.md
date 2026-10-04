@@ -215,8 +215,14 @@ EM for a GMM-HMM is very sensitive to the starting point. Provide
 3. **Optional:** run a few Viterbi-training iterations
    (`hmm_viterbi_training`) before Baum–Welch.
 
-Alternative for ergodic models: run global k-means with $M \cdot K$ clusters
-and assign clusters to states.
+For ergodic models use `method="kmeans"`: k-means with $M$ clusters over all
+frames assigns frames to states, then step 2 runs per state. (The first draft
+proposed one global k-means with $M \cdot K$ clusters, but then the mapping
+from clusters to states is arbitrary.)
+
+Implemented in `cmla/models/hmm_init.py`. k-means is seeded with k-means++:
+with random seeds, two centroids starting on the same side of well-separated
+data converge to the wrong split about half the time.
 
 ## 6. Tests to add
 
@@ -256,6 +262,11 @@ and assign clusters to states.
   uses `print`.** Make the directory a parameter and use `logger`.
 - **`hmm_plot.plot_checkpoint_dir` hard-codes 3 states and 4 symbol names,**
   so it fails on any other model size. Derive the layout from the model.
+- **`KmeansCluster` covariance statistics are wrong** (`cmla/models/kmeans.py`):
+  `PushSample` assigns `_X2[k] = x*x` instead of adding, and
+  `UpdateParameters` sets the whole `Sigma` array from one cluster. Also
+  `kmeans_clustering` keeps a reference to `mu_init` and changes the caller's
+  array. `init_gmm_hmm` uses only the k-means centroids and passes its own array.
 - ~~**The training loops `assert` that the log-likelihood never decreases.**~~
   Fixed in step 3: relative tolerance 1e-9. Converged GMM-HMM training showed
   decreases of about 1e-16 relative.
@@ -271,5 +282,5 @@ and assign clusters to states.
 - [x] Step 1: `Emission` / `DiscreteEmission` refactor (`cmla/models/emission.py`)
 - [x] Step 2: unified save/load (`HMM.to_dict`/`from_dict`, v2 format, v1 loader)
 - [x] Step 3: `GMMEmission` (diagonal) and `gaussian.py`
-- [ ] Step 4: initialisation
+- [x] Step 4: initialisation (`init_gmm_hmm`, uniform segmentation and k-means)
 - [ ] Step 5: tools and docs

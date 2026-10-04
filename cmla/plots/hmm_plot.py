@@ -44,9 +44,11 @@ def plot_checkpoint_dir(ckpt_file):
 
     state_name = ["A dominant", "B dominant", "Transient"]
     names = ["A", "B", "C", "D"]
+    from cmla.models.hmm import HMM  # avoid circular import at module load
+
     with open(ckpt_file, "rb") as f:
         model = pickle.load(f)
-        hmm = model.get("model", None)
+        hmm = HMM.from_dict(model["model"])
         # model_type = model.get("model_type", "")
         #                     'total_likelihood': total_likelihood,
         #                     'total_sequence_num': len(obss_seqs),

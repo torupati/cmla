@@ -254,6 +254,8 @@ and assign clusters to states.
   on `HMM`, so `cmla-hmm` crashes on every path. Fix this in step 5.
 - **`hmm_baum_welch` always writes checkpoints to `models/checkpoints/` and
   uses `print`.** Make the directory a parameter and use `logger`.
+- **`hmm_plot.plot_checkpoint_dir` hard-codes 3 states and 4 symbol names,**
+  so it fails on any other model size. Derive the layout from the model.
 - **The training loops `assert` that the log-likelihood never decreases.**
   Floating-point error with a GMM can break this, so compare with a tolerance
   (`prev - total < 1e-6 * abs(total)`).
@@ -267,7 +269,7 @@ and assign clusters to states.
 ## Progress
 
 - [x] Step 1: `Emission` / `DiscreteEmission` refactor (`cmla/models/emission.py`)
-- [ ] Step 2: unified save/load
+- [x] Step 2: unified save/load (`HMM.to_dict`/`from_dict`, v2 format, v1 loader)
 - [ ] Step 3: `GMMEmission` (diagonal)
 - [ ] Step 4: initialisation
 - [ ] Step 5: tools and docs

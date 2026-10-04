@@ -120,3 +120,26 @@ class DiscreteEmission(Emission):
         emission.probs = np.asarray(d["probs"], dtype=float)
         emission.reset_stats()
         return emission
+
+
+_EMISSION_TYPES: dict[str, type[Emission]] = {
+    "discrete": DiscreteEmission,
+}
+
+
+def emission_from_dict(d: dict) -> Emission:
+    """Create an emission from the output of Emission.to_dict().
+
+    Args:
+        d (dict): serialized emission. d["type"] selects the class.
+
+    Returns:
+        Emission: restored emission
+    """
+    emission_type = d.get("type")
+    if emission_type not in _EMISSION_TYPES:
+        raise ValueError(
+            f"Unknown emission type: {emission_type}. "
+            f"Expected one of {sorted(_EMISSION_TYPES)}"
+        )
+    return _EMISSION_TYPES[emission_type].from_dict(d)

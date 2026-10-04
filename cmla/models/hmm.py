@@ -10,11 +10,13 @@ from typing import List
 import numpy as np
 from numpy import log, zeros
 
-from .emission import DiscreteEmission, Emission
+from .emission import DiscreteEmission, Emission, emission_from_dict
 
 logger = getLogger(__name__)
 
 eps = 1.0e-128  # to avoid log(0)
+
+MODEL_FORMAT_VERSION = 2  # version of HMM.to_dict() output
 
 
 class HMM:
@@ -376,22 +378,59 @@ class HMM:
         self._training_total_log_likelihood = 0.0
         return tll
 
-    def save_hmm_and_data(self, out_file: str, x: np.ndarray, st: np.ndarray):
+    def to_dict(self) -> dict:
+        """HMM parameters as a JSON-serializable dict (format version 2).
+
+        Returns:
+            dict: model parameters including the serialized emission
+        """
+        return {
+            "model_type": "HMM",
+            "version": MODEL_FORMAT_VERSION,
+            "n_state": self.num_hidden_states,
+            "init_state": np.asarray(self.init_state).tolist(),
+            "state_tran": np.asarray(self.state_tran).tolist(),
+            "emission": self.emission.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "HMM":
+        """Create HMM from the output of to_dict().
+
+        Version 1 dicts (discrete HMM with "obs_prob") are also accepted.
+
+        Args:
+            d (dict): model parameters
+
+        Returns:
+            HMM: restored model
+        """
+        if "emission" in d:
+            emission = emission_from_dict(d["emission"])
+        elif "obs_prob" in d:  # version 1
+            emission = DiscreteEmission.from_dict({"probs": d["obs_prob"]})
+        else:
+            raise ValueError("Neither 'emission' nor 'obs_prob' found in model dict")
+        hmm = cls(emission.num_states, emission=emission)
+        M = hmm.num_hidden_states
+        hmm.init_state = np.asarray(d["init_state"], dtype=float)
+        hmm.state_tran = np.asarray(d["state_tran"], dtype=float)
+        if hmm.init_state.shape != (M,) or hmm.state_tran.shape != (M, M):
+            raise ValueError(
+                f"init_state {hmm.init_state.shape} and state_tran "
+                f"{hmm.state_tran.shape} do not match {M} states of emission"
+            )
+        return hmm
+
+    def save_hmm_and_data(self, out_file: str, x, st):
         """Save HMM model and data to pickle or JSON file based on file extension.
         Args:
             out_file (str): output file name (.pkl/.pickle for pickle, .json for JSON)
-            x (np.ndarray): observation sequence
-            st (np.ndarray): latent state sequence
+            x: observation sequences
+            st: latent state sequence
         """
-        hmm_param_dict = {
-            "init_state": self.init_state,
-            "state_tran": self.state_tran,
-            "obs_prob": self.obs_prob,
-            "n_state": self.num_hidden_states,
-        }
-
         data = {
-            "model_param": hmm_param_dict,
+            "model_param": self.to_dict(),
             "sample": x,
             "latent": st,
             "model_type": "HMM",
@@ -401,29 +440,36 @@ class HMM:
         file_ext = path.splitext(out_file)[1].lower()
 
         if file_ext in [".pkl", ".pickle"]:
-            # Save as pickle
             with open(out_file, "wb") as f:
                 pickle.dump(data, f)
         elif file_ext == ".json":
-            # Convert numpy arrays to lists for JSON serialization
-            json_data = {
-                "model_param": {
-                    "init_state": hmm_param_dict["init_state"].tolist(),
-                    "state_tran": hmm_param_dict["state_tran"].tolist(),
-                    "obs_prob": hmm_param_dict["obs_prob"].tolist(),
-                    "n_state": hmm_param_dict["n_state"],
-                },
-                "sample": x.tolist() if hasattr(x, "tolist") else x,
-                "latent": st.tolist() if hasattr(st, "tolist") else st,
-                "model_type": "HMM",
-            }
-            # Save as JSON
             with open(out_file, "w", encoding="utf-8") as f:
-                json.dump(json_data, f, indent=2, ensure_ascii=False)
+                json.dump(_to_jsonable(data), f, indent=2, ensure_ascii=False)
         else:
             raise ValueError(
                 f"Unsupported file extension: {file_ext}. Use .pkl, .pickle, or .json"
             )
+
+
+def _to_jsonable(obj):
+    """Convert numpy arrays and scalars (also nested in lists/dicts) to Python types."""
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+    if isinstance(obj, (np.ndarray, np.generic)):
+        return obj.tolist()
+    return obj
+
+
+def _from_json_sequences(obj):
+    """Convert JSON lists of sequences to numpy. Sequences may differ in length."""
+    if obj is None:
+        return None
+    try:
+        return np.array(obj)
+    except ValueError:  # ragged: keep a list of arrays
+        return [np.array(seq) for seq in obj]
 
 
 def hmm_viterbi_training(hmm, obss_seqs, itr_limit: int = 10) -> dict:
@@ -499,17 +545,9 @@ def hmm_baum_welch(hmm, obss_seqs, itr_limit: int = 100) -> dict:
         if _save_model and itr_count % 30 == 0:
             ckpt_file = path.join(outdir, f"hmm_checkpoint_{itr_count:06d}.ckpt")
             with open(ckpt_file, "wb") as f:
-                # todo: save model as dict
-                hmm_param_dict = {
-                    "init_state": hmm.init_state,
-                    "state_tran": hmm.state_tran,
-                    "obs_prob": hmm.obs_prob,
-                    "n_state": hmm.num_hidden_states,
-                    "n_obs": hmm.obs_prob.shape[1],
-                }
                 pickle.dump(
                     {
-                        "model": hmm_param_dict,
+                        "model": hmm.to_dict(),
                         "model_type": "HMM",
                         "total_likelihood": total_likelihood,
                         "total_sequence_num": len(obss_seqs),
@@ -534,32 +572,19 @@ def load_hmm_and_data(in_file: str):
         in_file (str): input file name (.pkl/.pickle for pickle, .json for JSON)
     Returns:
         hmm (HMM): HMM model
-        x (np.ndarray): observation sequence
+        x: observation sequences
         st (np.ndarray): latent state sequence
     """
     file_ext = path.splitext(in_file)[1].lower()
 
     if file_ext in [".pkl", ".pickle"]:
-        # Load from pickle
         with open(in_file, "rb") as f:
             data = pickle.load(f)
     elif file_ext == ".json":
-        # Load from JSON
         with open(in_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # Convert lists back to numpy arrays
-        if "model_param" in data:
-            model_param = data["model_param"]
-            if "init_state" in model_param:
-                model_param["init_state"] = np.array(model_param["init_state"])
-            if "state_tran" in model_param:
-                model_param["state_tran"] = np.array(model_param["state_tran"])
-            if "obs_prob" in model_param:
-                model_param["obs_prob"] = np.array(model_param["obs_prob"])
-        if "sample" in data:
-            data["sample"] = np.array(data["sample"])
-        if "latent" in data:
-            data["latent"] = np.array(data["latent"])
+        data["sample"] = _from_json_sequences(data.get("sample"))
+        data["latent"] = _from_json_sequences(data.get("latent"))
     else:
         raise ValueError(
             f"Unsupported file extension: {file_ext}. Use .pkl, .pickle, or .json"
@@ -569,19 +594,7 @@ def load_hmm_and_data(in_file: str):
     if model_param is None:
         raise ValueError(f"model_param not found in {in_file}")
 
-    n_state = model_param.get("n_state", None)
-    # Try to infer n_obs from obs_prob shape if not directly available
-    n_obs = model_param.get("n_obs", None)
-    if n_obs is None and "obs_prob" in model_param:
-        n_obs = model_param["obs_prob"].shape[1]
-
-    if n_state is None or n_obs is None:
-        raise ValueError(f"n_state or n_obs not found in model_param of {in_file}")
-
-    hmm = HMM(n_state, n_obs)
-    hmm.init_state = model_param.get("init_state", hmm.init_state)
-    hmm.state_tran = model_param.get("state_tran", hmm.state_tran)
-    hmm.obs_prob = model_param.get("obs_prob", hmm.obs_prob)
+    hmm = HMM.from_dict(model_param)
     x = data.get("sample", None)
     st = data.get("latent", None)
     return hmm, x, st

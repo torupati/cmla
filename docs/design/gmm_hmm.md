@@ -256,9 +256,9 @@ and assign clusters to states.
   uses `print`.** Make the directory a parameter and use `logger`.
 - **`hmm_plot.plot_checkpoint_dir` hard-codes 3 states and 4 symbol names,**
   so it fails on any other model size. Derive the layout from the model.
-- **The training loops `assert` that the log-likelihood never decreases.**
-  Floating-point error with a GMM can break this, so compare with a tolerance
-  (`prev - total < 1e-6 * abs(total)`).
+- ~~**The training loops `assert` that the log-likelihood never decreases.**~~
+  Fixed in step 3: relative tolerance 1e-9. Converged GMM-HMM training showed
+  decreases of about 1e-16 relative.
 
 ## Decisions
 
@@ -270,6 +270,6 @@ and assign clusters to states.
 
 - [x] Step 1: `Emission` / `DiscreteEmission` refactor (`cmla/models/emission.py`)
 - [x] Step 2: unified save/load (`HMM.to_dict`/`from_dict`, v2 format, v1 loader)
-- [ ] Step 3: `GMMEmission` (diagonal)
+- [x] Step 3: `GMMEmission` (diagonal) and `gaussian.py`
 - [ ] Step 4: initialisation
 - [ ] Step 5: tools and docs

@@ -10,7 +10,7 @@ from typing import List
 import numpy as np
 from numpy import log, zeros
 
-from .emission import DiscreteEmission, Emission, emission_from_dict
+from .emission import DiscreteEmission, Emission, GMMEmission, emission_from_dict
 
 logger = getLogger(__name__)
 
@@ -31,6 +31,8 @@ class HMM:
         observation_type: str = "discrete",
         *,
         emission: Emission | None = None,
+        num_mixtures: int = 1,
+        cov_type: str = "diag",
     ):
         """Define a Hidden Markov Model (HMM) parameter.
 
@@ -38,9 +40,11 @@ class HMM:
             num_hidden_states (int): Number of hidden state
             feature_dim (int): Category number (dimension) of observation.
                 Not used when emission is given.
-            observation_type (str): "discrete". Not used when emission is given.
+            observation_type (str): "discrete" or "gmm". Not used when emission is given.
             emission (Emission): emission distribution. Created from
                 feature_dim and observation_type when omitted.
+            num_mixtures (int): number of Gaussians per state ("gmm" only)
+            cov_type (str): covariance type of Gaussians ("gmm" only)
         """
         if num_hidden_states < 1:
             raise ValueError(f"num_hidden_states must be > 0. got {num_hidden_states}")
@@ -56,6 +60,10 @@ class HMM:
                 raise ValueError(f"feature_dim must be > 0. got {feature_dim}")
             if observation_type == "discrete":
                 emission = DiscreteEmission(num_hidden_states, feature_dim)
+            elif observation_type == "gmm":
+                emission = GMMEmission(
+                    num_hidden_states, num_mixtures, feature_dim, cov_type=cov_type
+                )
             else:
                 raise NotImplementedError(
                     f"Unknown observation_type: {observation_type}"
@@ -135,8 +143,9 @@ class HMM:
         # it is not necessary to keep at the same time and memory exhasting.
         # (1) log P(x[t]|s[t]) is only required at time step t in viterbi search
         # (2) Probability can be stored in log scale in advance.
-        # floor log b_j(x[t]) to keep the trellis finite
-        _log_obsprob = np.maximum(self.emission.log_prob(obss), np.log(1.0e-100))
+        # replace log(0) to keep the trellis finite
+        _log_obsprob = self.emission.log_prob(obss)
+        _log_obsprob[np.isneginf(_log_obsprob)] = np.log(1.0e-100)
 
         _trellis_prob = np.ones((self.num_hidden_states, T), dtype=float) * np.log(
             eps
@@ -499,7 +508,8 @@ def hmm_viterbi_training(hmm, obss_seqs, itr_limit: int = 10) -> dict:
         training_history["log_likelihood"].append(total_likelihood / len(obss_seqs))
 
         if itr_count > 0:
-            assert prev_likelihood <= total_likelihood
+            # EM never decreases likelihood. allow round-off error.
+            assert total_likelihood >= prev_likelihood - 1.0e-9 * abs(prev_likelihood)
         prev_likelihood = total_likelihood
         itr_count += 1
     return training_history
@@ -560,7 +570,8 @@ def hmm_baum_welch(hmm, obss_seqs, itr_limit: int = 100) -> dict:
 
         # print('------ after Baum welch trianing ------')
         if itr_count > 0:
-            assert prev_likelihood <= total_likelihood
+            # EM never decreases likelihood. allow round-off error.
+            assert total_likelihood >= prev_likelihood - 1.0e-9 * abs(prev_likelihood)
         prev_likelihood = total_likelihood
         itr_count += 1
     return ll_history

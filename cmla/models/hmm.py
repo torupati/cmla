@@ -403,8 +403,8 @@ class HMM:
                     "obs_prob": hmm_param_dict["obs_prob"].tolist(),
                     "n_state": hmm_param_dict["n_state"],
                 },
-                "sample": x.tolist(),
-                "latent": st.tolist(),
+                "sample": x.tolist() if hasattr(x, "tolist") else x,
+                "latent": st.tolist() if hasattr(st, "tolist") else st,
                 "model_type": "HMM",
             }
             # Save as JSON
@@ -575,16 +575,3 @@ def load_hmm_and_data(in_file: str):
     x = data.get("sample", None)
     st = data.get("latent", None)
     return hmm, x, st
-
-
-def load_hmm_and_data_from_pickle(in_file: str):
-    """Load HMM model and data from pickle file.
-    Deprecated: Use load_hmm_and_data() instead for automatic format detection.
-    Args:
-        in_file (str): input file name
-    Returns:
-        hmm (HMM): HMM model
-        x (np.ndarray): observation sequence
-        st (np.ndarray): latent state sequence
-    """
-    return load_hmm_and_data(in_file)

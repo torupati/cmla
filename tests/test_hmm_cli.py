@@ -191,3 +191,34 @@ def test_plots(gmm_hmm_data, discrete_data, tmp_path):
     out_file = tmp_path / "discrete.png"
     plot_checkpoint_dir(str(discrete_data), str(out_file))
     assert out_file.exists()
+
+
+def test_train_viterbi_then_baum_welch(gmm_hmm_data, tmp_path, capsys):
+    hmm_cli.main(
+        [
+            "train",
+            "--type",
+            "gmm",
+            "--states",
+            "2",
+            "-f",
+            str(gmm_hmm_data.with_suffix(".csv")),
+            "--viterbi-iterations",
+            "2",
+            "-n",
+            "3",
+            "-o",
+            str(tmp_path / "m.json"),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert "[1/2] Viterbi training" in out
+    assert "[2/2] Baum-Welch training (forward-backward algorithm)" in out
+    assert out.index("[1/2]") < out.index("[2/2]")
+    assert "2 viterbi + 3 baum-welch iterations" in out
+
+
+def test_negative_iterations(capsys):
+    with pytest.raises(SystemExit):
+        hmm_cli.main(["train", "-obs", "0 1", "--viterbi-iterations", "-1"])
+    assert ">= 0" in capsys.readouterr().err

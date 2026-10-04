@@ -72,8 +72,16 @@ def observation_type_of(hmm: HMM) -> str:
     return "discrete" if isinstance(hmm.emission, DiscreteEmission) else "gmm"
 
 
+ALGORITHM_NAMES = {
+    "baum-welch": "Baum-Welch training (forward-backward algorithm)",
+    "viterbi": "Viterbi training (Viterbi algorithm)",
+}
+
+
 def train(args):
     """Train an HMM and save it."""
+    if args.iterations < 0 or args.viterbi_iterations < 0:
+        raise ValueError("number of iterations must be >= 0")
     np.random.seed(args.seed)
     if args.model:
         hmm = HMM.load(str(args.model))
@@ -98,16 +106,23 @@ def train(args):
         flush=True,  # before log messages on stderr
     )
 
-    if args.algorithm == "baum-welch":
-        hmm_baum_welch(
-            hmm, seqs, itr_limit=args.iterations, checkpoint_dir=args.checkpoint_dir
+    # optional Viterbi training stage before the main algorithm
+    stages = [("viterbi", args.viterbi_iterations), (args.algorithm, args.iterations)]
+    stages = [(name, n) for name, n in stages if n > 0]
+    for i, (name, n) in enumerate(stages, start=1):
+        print(
+            f"[{i}/{len(stages)}] {ALGORITHM_NAMES[name]}: {n} iterations", flush=True
         )
-    else:
-        hmm_viterbi_training(hmm, seqs, itr_limit=args.iterations)
+        if name == "baum-welch":
+            hmm_baum_welch(hmm, seqs, itr_limit=n, checkpoint_dir=args.checkpoint_dir)
+        else:
+            hmm_viterbi_training(hmm, seqs, itr_limit=n)
+
     # per-iteration values are computed before each update; evaluate the final model
     total = sum(hmm.log_likelihood(x) for x in seqs)
+    done = " + ".join(f"{n} {name}" for name, n in stages) or "0"
     print(
-        f"Training completed: {args.iterations} iterations, "
+        f"Training completed: {done} iterations, "
         f"E[log P(X)] = {total / len(seqs):.4f} per sequence, "
         f"{total / sum(map(len, seqs)):.4f} per frame"
     )
@@ -216,6 +231,12 @@ def create_parser():
     )
     train_parser.add_argument(
         "--iterations", "-n", type=int, default=20, help="Training iterations"
+    )
+    train_parser.add_argument(
+        "--viterbi-iterations",
+        type=int,
+        default=0,
+        help="Viterbi training iterations run before --algorithm (default: 0)",
     )
     train_parser.add_argument(
         "--checkpoint-dir", type=Path, help="Save Baum-Welch checkpoints here"

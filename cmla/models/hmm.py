@@ -10,6 +10,8 @@ from typing import List
 import numpy as np
 from numpy import log, zeros
 
+from .emission import DiscreteEmission, Emission
+
 logger = getLogger(__name__)
 
 eps = 1.0e-128  # to avoid log(0)
@@ -23,14 +25,20 @@ class HMM:
     def __init__(
         self,
         num_hidden_states: int,
-        feature_dim: int,
+        feature_dim: int | None = None,
         observation_type: str = "discrete",
+        *,
+        emission: Emission | None = None,
     ):
         """Define a Hidden Markov Model (HMM) parameter.
 
         Args:
             num_hidden_states (int): Number of hidden state
-            feature_dim (int): Category number (dimension) of observation
+            feature_dim (int): Category number (dimension) of observation.
+                Not used when emission is given.
+            observation_type (str): "discrete". Not used when emission is given.
+            emission (Emission): emission distribution. Created from
+                feature_dim and observation_type when omitted.
         """
         if num_hidden_states < 1:
             raise ValueError(f"num_hidden_states must be > 0. got {num_hidden_states}")
@@ -40,23 +48,26 @@ class HMM:
         self.state_tran = np.ones((num_hidden_states, num_hidden_states)) * (
             1 / num_hidden_states
         )  # state transition probability, Pr(s[t+1]=j | s[t]=i)
-        if feature_dim < 1:
-            raise ValueError(f"feature_dim must be > 0. got {feature_dim}")
 
-        if observation_type == "discrete":
-            self.obs_prob = np.zeros(
-                (num_hidden_states, feature_dim)
-            )  # state emission probability, Pr(y|s[t]=i)
-            for m in range(num_hidden_states):
-                self.obs_prob[m, :] = np.random.uniform(0, 1, feature_dim)
-                self.obs_prob[m, :] = self.obs_prob[m, :] / self.obs_prob[m, :].sum()
-        else:
-            raise NotImplementedError(f"Unknown observation_type: {observation_type}")
+        if emission is None:
+            if feature_dim is None or feature_dim < 1:
+                raise ValueError(f"feature_dim must be > 0. got {feature_dim}")
+            if observation_type == "discrete":
+                emission = DiscreteEmission(num_hidden_states, feature_dim)
+            else:
+                raise NotImplementedError(
+                    f"Unknown observation_type: {observation_type}"
+                )
+        elif emission.num_states != num_hidden_states:
+            raise ValueError(
+                f"emission.num_states ({emission.num_states}) must be same as "
+                f"num_hidden_states ({num_hidden_states})"
+            )
+        self.emission = emission  # state emission probability, Pr(y|s[t]=i)
 
         # training variables (keep sufficient statistics for parameter update)
         self._ini_state_stat = np.zeros(num_hidden_states)
         self._state_tran_stat = np.zeros((num_hidden_states, num_hidden_states))
-        self._obs_count = np.zeros((num_hidden_states, feature_dim))
         self._training_count = 0
         self._training_total_log_likelihood = 0.0
 
@@ -68,8 +79,31 @@ class HMM:
             + " [transition probability]\n"
             + f"{self.state_tran.shape}\n"
             + "observation probability\n"
-            + f" {self.obs_prob.shape}"
+            + f" {self.emission}"
         )
+
+    @property
+    def obs_prob(self) -> np.ndarray:
+        """Emission probability matrix (M, K) of discrete HMM.
+
+        Compatibility accessor for DiscreteEmission.probs.
+        """
+        if not isinstance(self.emission, DiscreteEmission):
+            raise AttributeError(
+                f"obs_prob is only defined for DiscreteEmission. "
+                f"got {type(self.emission).__name__}"
+            )
+        return self.emission.probs
+
+    @obs_prob.setter
+    def obs_prob(self, value):
+        if not isinstance(self.emission, DiscreteEmission):
+            raise AttributeError(
+                f"obs_prob is only defined for DiscreteEmission. "
+                f"got {type(self.emission).__name__}"
+            )
+        self.emission.probs = np.asarray(value, dtype=float)
+        self.emission.reset_stats()
 
     @property
     def num_hidden_states(self) -> int:
@@ -81,13 +115,13 @@ class HMM:
         return self.state_tran.shape[0]
 
     def viterbi_search(self, obss):
-        """Viterbi search of discrete observation HMM. Likelihood is in log scale.
+        """Viterbi search of HMM. Likelihood is in log scale.
 
         - Finds the most-probable (Viterbi) path through the HMM states given observation.
         - Trellis (search space) is allocated in this method and release after the computation.
 
         Args:
-            obss (List[int]): given observation sequence(descreat signal), y[t]
+            obss: given observation sequence, y[t]
 
         Returns:
             best_path (List[int]): most probable state sequence, s[t]
@@ -99,14 +133,8 @@ class HMM:
         # it is not necessary to keep at the same time and memory exhasting.
         # (1) log P(x[t]|s[t]) is only required at time step t in viterbi search
         # (2) Probability can be stored in log scale in advance.
-        _log_obsprob = np.zeros((T, self.num_hidden_states))
-        for t in range(T):
-            x_t = np.zeros(self.obs_prob.shape[1])
-            x_t[obss[t]] = 1.0
-            for s in range(self.num_hidden_states):
-                _obs_prob = self.obs_prob[s, :]
-                _obs_prob[_obs_prob < 1.0e-100] = 1.0e-100
-                _log_obsprob[t, s] = np.dot(x_t, np.log(_obs_prob))
+        # floor log b_j(x[t]) to keep the trellis finite
+        _log_obsprob = np.maximum(self.emission.log_prob(obss), np.log(1.0e-100))
 
         _trellis_prob = np.ones((self.num_hidden_states, T), dtype=float) * np.log(
             eps
@@ -180,15 +208,7 @@ class HMM:
         Returns:
             np.ndarray: (T, M)-shape array, log observation probabilities
         """
-        T = len(obss)
-        _log_obsprob = np.zeros((T, self.num_hidden_states))  # log P(x[t]|s[t]=i)
-        for t in range(T):
-            # create one-hot vector for observation.
-            x_t = np.zeros(self.obs_prob.shape[1])
-            x_t[obss[t]] = 1.0
-            for s in range(self.num_hidden_states):
-                _log_obsprob[t, s] = np.dot(x_t, np.log(self.obs_prob[s, :]))
-        return _log_obsprob
+        return self.emission.log_prob(obss)  # log P(x[t]|s[t]=i)
 
     def forward_algorithm(self, obsprob) -> tuple[np.ndarray, np.ndarray]:
         """HMM forward algorithm
@@ -241,12 +261,7 @@ class HMM:
         Returns:
             np.ndarray: (T, M)-shape array, log observation probabilities
         """
-        T = len(obss)
-        _obsprob = np.zeros((T, self.num_hidden_states))
-        for t in range(T):
-            for s in range(self.num_hidden_states):
-                _obsprob[t, s] = self.obs_prob[s, obss[t]]
-        return _obsprob
+        return np.exp(self.emission.log_prob(obss))
 
     def forward_backward_algorithm_linear(self, obss):
         """Push training sequence to get probability of latent varialble condition by input.
@@ -258,11 +273,15 @@ class HMM:
             gamma_1: g(t,s,s') = P(S[t]=s,S[t+1]=s'|X)
         """
         T = len(obss)
-        # _obsprob = np.exp(self.calc_logobss(obss))
-        _obsprob = self.calculate_prob(obss)
+        # Scale b_j(x[t]) by 1/max_j b_j(x[t]) at each t so that densities do not
+        # underflow. The scale cancels in gamma and xi, and is added back to log P(X).
+        _log_obsprob = self.emission.log_prob(obss)
+        _log_offset = _log_obsprob.max(axis=1, keepdims=True)
+        _log_offset[~np.isfinite(_log_offset)] = 0.0
+        _obsprob = np.exp(_log_obsprob - _log_offset)
         _alpha, _alpha_scale = self.forward_algorithm(_obsprob)
 
-        _log_prob = 0.0
+        _log_prob = _log_offset.sum()
         for t in range(T):
             _log_prob += np.log(_alpha_scale[t])  # sum_s log P(x[1:T],s[T]=s)
         self._training_total_log_likelihood += _log_prob
@@ -315,20 +334,15 @@ class HMM:
         This function is used in both Viterbi traning and Baum-Welch algorithm.
 
         Args:
-            obss (numpy.ndarray): A shape-(T,D) array, observation X given
-            g1 (numpy.ndarray): A shape-(T, M) array, gamma(t, s, s') = P(S[t]=s, S[t+1]=s'|X)
-            g2 (numpy.ndarray): A shape-(T, M, M) array, gamma(t, s) = P(S[t]=s|X)
+            obss: observation sequence X of length T
+            g1 (numpy.ndarray): A shape-(T, M) array, gamma(t, s) = P(S[t]=s|X)
+            g2 (numpy.ndarray): A shape-(T-1, M, M) array, gamma(t, s, s') = P(S[t]=s, S[t+1]=s'|X)
         """
         T = len(obss)
         self._ini_state_stat = self._ini_state_stat + g1[0]
         for t in range(T - 1):
             self._state_tran_stat = self._state_tran_stat + g2[t, :, :]
-        for t in range(T):
-            # make one-hot vector for observation
-            o_t = np.zeros(self.obs_prob.shape[1])
-            o_t[obss[t]] = 1
-            for _m in range(self.num_hidden_states):
-                self._obs_count[_m, :] = self._obs_count[_m, :] + g1[t, _m] * o_t
+        self.emission.accumulate(obss, g1)
         self._training_count += 1
 
     def update_parameters(self):
@@ -344,22 +358,18 @@ class HMM:
             eps  # if probability is lower then eps, set eps to void log(0)
         )
         self.init_state = _init_state
+        self.emission.update()  # also resets its sufficient statistics
         for m in range(self.num_hidden_states):  # normalize each state
             if sum(self._state_tran_stat[m, :]) > 0.0:
                 self.state_tran[m, :] = self._state_tran_stat[m, :] / sum(
                     self._state_tran_stat[m, :]
                 )
-            if sum(self._obs_count[m, :]) > 0.0:
-                self.obs_prob[m, :] = self._obs_count[m, :] / sum(self._obs_count[m, :])
 
         # reset training variables
         self._ini_state_stat = np.zeros(self.num_hidden_states)
         self._state_tran_stat = np.zeros(
             (self.num_hidden_states, self.num_hidden_states)
         )
-        self._obs_count = np.zeros(
-            (self.num_hidden_states, self.obs_prob.shape[1])
-        )  # descrete observation
         self._training_count = 0
 
         tll = self._training_total_log_likelihood

@@ -116,6 +116,7 @@ Command-Line Tools
 
    contributing
    changelog
+   design/gmm_hmm
 
 Indices and tables
 ==================

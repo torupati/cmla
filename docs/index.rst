@@ -29,7 +29,7 @@ Features
 
 * **K-means Clustering**: Non-hierarchical clustering algorithm with multiple covariance matrix types
 * **Gaussian Mixture Model (GMM)**: Probabilistic clustering using EM algorithm
-* **Hidden Markov Model (HMM)**: Time series modeling with Forward-Backward, Viterbi, and Baum-Welch algorithms
+* **Hidden Markov Model (HMM)**: Time series modeling with Forward-Backward, Viterbi, and Baum-Welch algorithms; discrete or Gaussian mixture (GMM-HMM) emissions
 * **Command-Line Tools**: Easy-to-use CLI interfaces for all algorithms
 * **Visualization**: Built-in plotting capabilities for results analysis
 
@@ -68,9 +68,12 @@ Basic Usage
 
    # Hidden Markov Model
    from cmla.models.hmm import HMM
-   hmm = HMM(num_states=2, num_observations=2)
+   hmm = HMM(2, 2)  # 2 states, 2 symbols (random emission probabilities)
    observations = [0, 1, 0, 1, 1]
-   path, prob = hmm.viterbi(observations)
+   path, log_prob = hmm.viterbi_search(observations)
+
+   # HMM with Gaussian mixture emission (2-D observations)
+   gmm_hmm = HMM(3, 2, observation_type="gmm", num_mixtures=2)
 
 Command-Line Tools
 ~~~~~~~~~~~~~~~~~~
@@ -81,7 +84,7 @@ Command-Line Tools
    uv run python scripts/kmeans_cli.py --random-data --clusters 3
 
    # HMM Viterbi algorithm
-   uv run python scripts/hmm_cli.py --viterbi --observations "0 1 0 1"
+   uv run python -m cmla.scripts.hmm_cli viterbi --model model.json --observations "0 1 0 1"
 
    # MCMC sampling
    uv run python scripts/sampler_cli.py --method metropolis --samples 1000
@@ -116,6 +119,7 @@ Command-Line Tools
 
    contributing
    changelog
+   design/gmm_hmm
 
 Indices and tables
 ==================

@@ -6,12 +6,14 @@
 # python tools/sample_generator.py MM 100 out_mm.pickle
 import json
 import logging
+import os
 import pickle
 
 import numpy as np
 
 from cmla.models.hmm import HMM
 from cmla.models.sampler import (
+    generate_gmm_hmm_parameter,
     generate_gmm_samples,
     generate_sample_parameter,
     sample_lengths,
@@ -151,6 +153,27 @@ def main_hmm(args):
     _logger.info(f"output: {args.out_file}")
 
 
+def main_gmm_hmm(args):
+    """Generate observation sequences from a random GMM-HMM.
+
+    Model and data are saved by HMM.save_hmm_and_data (JSON or pickle by extension).
+    With --csv, sequences are also written to a CSV file separated by blank lines.
+    """
+    _logger.info(f"{args=}")
+    np.random.seed(args.random_seed)
+
+    hmm_param = generate_gmm_hmm_parameter(args.states, args.mixtures, args.dimension)
+    x_lengths = sample_lengths(args.avelen, args.N)
+    st, x = sampling_from_hmm(x_lengths, hmm_param)
+
+    hmm_param.save_hmm_and_data(args.out_file, x, st)
+    _logger.info(f"output: {args.out_file}")
+    if args.csv:
+        csv_file = os.path.splitext(args.out_file)[0] + ".csv"
+        save_sequences_with_blank(csv_file, [np.array(seq) for seq in x])
+        _logger.info("CSV output: %s", csv_file)
+
+
 def create_parser():
     """Create and return the argument parser"""
     import argparse
@@ -176,8 +199,8 @@ def create_parser():
 
     subparsers = parser.add_subparsers(
         title="model",
-        description="probabilistic models(gmm,mm,hmm)",
-        help="select one from GMM,HMM,MM",
+        description="probabilistic models(gmm,mm,hmm,hmm-gmm)",
+        help="select one from GMM,HMM,MM,HMM-GMM",
         required=True,
     )
     # Markov Process
@@ -199,6 +222,27 @@ def create_parser():
         "--avelen", type=int, help="average sample lengths", default=10
     )
     parser_hmm.set_defaults(func=main_hmm)
+
+    # Hidden Markov Model with Gaussian mixture emission
+    parser_gmm_hmm = subparsers.add_parser(
+        "HMM-GMM", help="Hidden markov models with Gaussian mixture emission"
+    )
+    parser_gmm_hmm.add_argument(
+        "--avelen", type=int, help="average sample lengths", default=50
+    )
+    parser_gmm_hmm.add_argument(
+        "--states", type=int, help="number of hidden states", default=3
+    )
+    parser_gmm_hmm.add_argument(
+        "--mixtures", type=int, help="number of Gaussians per state", default=2
+    )
+    parser_gmm_hmm.add_argument(
+        "--dimension", type=int, help="vector dimension", default=2
+    )
+    parser_gmm_hmm.add_argument(
+        "--random-seed", type=int, help="random seed", default=0
+    )
+    parser_gmm_hmm.set_defaults(func=main_gmm_hmm)
 
     return parser
 

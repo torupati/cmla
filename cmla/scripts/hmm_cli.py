@@ -94,19 +94,23 @@ def train(args):
             )
             init_gmm_hmm(hmm, seqs, method=args.init)
     print(
-        f"Model: {hmm.emission} ({len(seqs)} sequences, {sum(map(len, seqs))} frames)"
+        f"Model: {hmm.emission} ({len(seqs)} sequences, {sum(map(len, seqs))} frames)",
+        flush=True,  # before log messages on stderr
     )
 
     if args.algorithm == "baum-welch":
-        history = hmm_baum_welch(
+        hmm_baum_welch(
             hmm, seqs, itr_limit=args.iterations, checkpoint_dir=args.checkpoint_dir
         )
-        final = history["log_likelihood"][-1] / len(seqs)
     else:
-        history = hmm_viterbi_training(hmm, seqs, itr_limit=args.iterations)
-        final = history["log_likelihood"][-1]
-    # likelihood of the last iteration is computed with the parameters before update
-    print(f"Training completed: {args.iterations} iterations, E[log P(X)]={final:.4f}")
+        hmm_viterbi_training(hmm, seqs, itr_limit=args.iterations)
+    # per-iteration values are computed before each update; evaluate the final model
+    total = sum(hmm.log_likelihood(x) for x in seqs)
+    print(
+        f"Training completed: {args.iterations} iterations, "
+        f"E[log P(X)] = {total / len(seqs):.4f} per sequence, "
+        f"{total / sum(map(len, seqs)):.4f} per frame"
+    )
 
     hmm.save(str(args.output))
     print(f"Model saved to {args.output}")
@@ -160,12 +164,23 @@ def create_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument(
-        "--verbose", "-v", action="store_true", help="Show progress of training"
+    # logging options, accepted after any subcommand
+    log_options = argparse.ArgumentParser(add_help=False)
+    log_group = log_options.add_mutually_exclusive_group()
+    log_group.add_argument(
+        "--verbose", "-v", action="store_true", help="Show all log messages"
+    )
+    log_group.add_argument(
+        "--quiet",
+        "-q",
+        action="store_true",
+        help="Do not show log-likelihood of each training iteration",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    train_parser = subparsers.add_parser("train", help="Train HMM model")
+    train_parser = subparsers.add_parser(
+        "train", help="Train HMM model", parents=[log_options]
+    )
     add_data_arguments(train_parser)
     train_parser.add_argument(
         "--model", "-m", type=Path, help="Initial model (otherwise created from data)"
@@ -219,7 +234,7 @@ def create_parser():
         ("viterbi", viterbi, "Most likely state sequence (Viterbi algorithm)"),
         ("forward", forward, "Log-likelihood of sequences (forward algorithm)"),
     ]:
-        sub = subparsers.add_parser(name, help=help_text)
+        sub = subparsers.add_parser(name, help=help_text, parents=[log_options])
         sub.add_argument(
             "--model", "-m", type=Path, required=True, help="HMM model file"
         )
@@ -233,10 +248,14 @@ def main(argv=None):
     """Main CLI entry point."""
     parser = create_parser()
     args = parser.parse_args(argv)
-    logging.basicConfig(
-        level=logging.INFO if args.verbose else logging.WARNING,
-        format="%(levelname)s %(name)s: %(message)s",
-    )
+    if args.verbose:
+        logging.basicConfig(
+            level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+        )
+    else:
+        logging.basicConfig(level=logging.WARNING, format="%(message)s")
+        if not args.quiet:  # training progress of HMM only
+            logging.getLogger("cmla.models.hmm").setLevel(logging.INFO)
     try:
         args.func(args)
     except (OSError, ValueError, KeyError, TypeError) as e:

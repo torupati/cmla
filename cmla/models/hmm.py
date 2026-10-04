@@ -565,8 +565,12 @@ def hmm_viterbi_training(hmm, obss_seqs, itr_limit: int = 10) -> dict:
             g1, g2, ll = hmm.forward_viterbi(x)
             hmm.push_sufficient_statistics(x, g1, g2)
         total_likelihood = hmm.update_parameters()
+        # Viterbi score log P(X, S*) with the parameters before this update
         logger.info(
-            "itr {} E[logP(X)]={}".format(itr_count, total_likelihood / len(obss_seqs))
+            "iteration %d: E[log P(X,S*)] = %.4f per sequence, %.4f per frame",
+            itr_count,
+            total_likelihood / len(obss_seqs),
+            total_likelihood / sum(len(x) for x in obss_seqs),
         )
         training_history["step"].append(itr_count)
         training_history["log_likelihood"].append(total_likelihood / len(obss_seqs))
@@ -616,8 +620,12 @@ def hmm_baum_welch(
             hmm.push_sufficient_statistics(x, _gamma, _xi)
             total_obs_num += len(x)
         total_likelihood = hmm.update_parameters()
+        # log P(X) with the parameters before this update
         logger.info(
-            "itr {} E[logP(X)]={}".format(itr_count, total_likelihood / len(obss_seqs))
+            "iteration %d: E[log P(X)] = %.4f per sequence, %.4f per frame",
+            itr_count,
+            total_likelihood / len(obss_seqs),
+            total_likelihood / total_obs_num,
         )
         ll_history["step"].append(itr_count)
         ll_history["log_likelihood"].append(total_likelihood)

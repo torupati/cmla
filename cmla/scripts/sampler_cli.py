@@ -125,7 +125,7 @@ def main_mm(args):
             json.dump(
                 {
                     "model_param": markov_model_dict,
-                    "sample": sample_data,  # sample_data is already a list
+                    "sample": [[int(s) for s in seq] for seq in sample_data],
                     "model_type": "MarkovProcess",
                 },
                 f,

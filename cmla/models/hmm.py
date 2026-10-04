@@ -320,22 +320,15 @@ class HMM:
 
             # merge forward probability and backward probability
             _g1[t - 1, :] = _alpha[t - 1, :] * _beta[t - 1, :]
-            assert (_g1[t - 1, :].sum() - 1.0) < 1.0e-9
-            for i in range(self.num_hidden_states):
-                for j in range(self.num_hidden_states):  # transition s[t-1] to s[t]
-                    _g2[t - 1, i, j] = (
-                        _alpha[t - 1, i]
-                        * self.state_tran[i, j]
-                        * _obsprob[t, j]
-                        * _beta[t, j]
-                    )
-            _g2[t - 1, :, :] = _g2[t - 1, :, :] / _alpha_scale[t]
-            # print('value=', (np.dot(_alpha[t-1,:], self.state_tran) * _obsprob[t-1,:]).shape)
-            # print('gzi=', _g2[t-1,:,:])
-            # print(f'sum(gzai[t={t-1}])', _g2[t-1,:,:].sum(axis=1))
-            # input()
-            for i in range(self.num_hidden_states):
-                assert (_g1[t - 1, i] - _g2[t - 1, i, :].sum()) < 1.0e-06
+            # xi(t-1, i, j) for transition s[t-1]=i to s[t]=j
+            _g2[t - 1, :, :] = (
+                _alpha[t - 1, :, np.newaxis]
+                * self.state_tran
+                * (_obsprob[t, :] * _beta[t, :])[np.newaxis, :]
+                / _alpha_scale[t]
+            )
+        assert np.all(np.abs(_g1.sum(axis=1) - 1.0) < 1.0e-9)
+        assert np.all(np.abs(_g1[:-1, :] - _g2.sum(axis=2)) < 1.0e-6)
         return _g1, _g2, _log_prob
 
     def push_sufficient_statistics(

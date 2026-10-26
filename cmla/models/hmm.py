@@ -10,9 +10,13 @@ from typing import List
 import numpy as np
 from numpy import log, zeros
 
+from .emission import DiscreteEmission, Emission, GMMEmission, emission_from_dict
+
 logger = getLogger(__name__)
 
 eps = 1.0e-128  # to avoid log(0)
+
+MODEL_FORMAT_VERSION = 2  # version of HMM.to_dict() output
 
 
 class HMM:
@@ -23,14 +27,24 @@ class HMM:
     def __init__(
         self,
         num_hidden_states: int,
-        feature_dim: int,
+        feature_dim: int | None = None,
         observation_type: str = "discrete",
+        *,
+        emission: Emission | None = None,
+        num_mixtures: int = 1,
+        cov_type: str = "diag",
     ):
         """Define a Hidden Markov Model (HMM) parameter.
 
         Args:
             num_hidden_states (int): Number of hidden state
-            feature_dim (int): Category number (dimension) of observation
+            feature_dim (int): Category number (dimension) of observation.
+                Not used when emission is given.
+            observation_type (str): "discrete" or "gmm". Not used when emission is given.
+            emission (Emission): emission distribution. Created from
+                feature_dim and observation_type when omitted.
+            num_mixtures (int): number of Gaussians per state ("gmm" only)
+            cov_type (str): covariance type of Gaussians ("gmm" only)
         """
         if num_hidden_states < 1:
             raise ValueError(f"num_hidden_states must be > 0. got {num_hidden_states}")
@@ -40,23 +54,30 @@ class HMM:
         self.state_tran = np.ones((num_hidden_states, num_hidden_states)) * (
             1 / num_hidden_states
         )  # state transition probability, Pr(s[t+1]=j | s[t]=i)
-        if feature_dim < 1:
-            raise ValueError(f"feature_dim must be > 0. got {feature_dim}")
 
-        if observation_type == "discrete":
-            self.obs_prob = np.zeros(
-                (num_hidden_states, feature_dim)
-            )  # state emission probability, Pr(y|s[t]=i)
-            for m in range(num_hidden_states):
-                self.obs_prob[m, :] = np.random.uniform(0, 1, feature_dim)
-                self.obs_prob[m, :] = self.obs_prob[m, :] / self.obs_prob[m, :].sum()
-        else:
-            raise NotImplementedError(f"Unknown observation_type: {observation_type}")
+        if emission is None:
+            if feature_dim is None or feature_dim < 1:
+                raise ValueError(f"feature_dim must be > 0. got {feature_dim}")
+            if observation_type == "discrete":
+                emission = DiscreteEmission(num_hidden_states, feature_dim)
+            elif observation_type == "gmm":
+                emission = GMMEmission(
+                    num_hidden_states, num_mixtures, feature_dim, cov_type=cov_type
+                )
+            else:
+                raise NotImplementedError(
+                    f"Unknown observation_type: {observation_type}"
+                )
+        elif emission.num_states != num_hidden_states:
+            raise ValueError(
+                f"emission.num_states ({emission.num_states}) must be same as "
+                f"num_hidden_states ({num_hidden_states})"
+            )
+        self.emission = emission  # state emission probability, Pr(y|s[t]=i)
 
         # training variables (keep sufficient statistics for parameter update)
         self._ini_state_stat = np.zeros(num_hidden_states)
         self._state_tran_stat = np.zeros((num_hidden_states, num_hidden_states))
-        self._obs_count = np.zeros((num_hidden_states, feature_dim))
         self._training_count = 0
         self._training_total_log_likelihood = 0.0
 
@@ -68,8 +89,31 @@ class HMM:
             + " [transition probability]\n"
             + f"{self.state_tran.shape}\n"
             + "observation probability\n"
-            + f" {self.obs_prob.shape}"
+            + f" {self.emission}"
         )
+
+    @property
+    def obs_prob(self) -> np.ndarray:
+        """Emission probability matrix (M, K) of discrete HMM.
+
+        Compatibility accessor for DiscreteEmission.probs.
+        """
+        if not isinstance(self.emission, DiscreteEmission):
+            raise AttributeError(
+                f"obs_prob is only defined for DiscreteEmission. "
+                f"got {type(self.emission).__name__}"
+            )
+        return self.emission.probs
+
+    @obs_prob.setter
+    def obs_prob(self, value):
+        if not isinstance(self.emission, DiscreteEmission):
+            raise AttributeError(
+                f"obs_prob is only defined for DiscreteEmission. "
+                f"got {type(self.emission).__name__}"
+            )
+        self.emission.probs = np.asarray(value, dtype=float)
+        self.emission.reset_stats()
 
     @property
     def num_hidden_states(self) -> int:
@@ -81,13 +125,13 @@ class HMM:
         return self.state_tran.shape[0]
 
     def viterbi_search(self, obss):
-        """Viterbi search of discrete observation HMM. Likelihood is in log scale.
+        """Viterbi search of HMM. Likelihood is in log scale.
 
         - Finds the most-probable (Viterbi) path through the HMM states given observation.
         - Trellis (search space) is allocated in this method and release after the computation.
 
         Args:
-            obss (List[int]): given observation sequence(descreat signal), y[t]
+            obss: given observation sequence, y[t]
 
         Returns:
             best_path (List[int]): most probable state sequence, s[t]
@@ -99,14 +143,9 @@ class HMM:
         # it is not necessary to keep at the same time and memory exhasting.
         # (1) log P(x[t]|s[t]) is only required at time step t in viterbi search
         # (2) Probability can be stored in log scale in advance.
-        _log_obsprob = np.zeros((T, self.num_hidden_states))
-        for t in range(T):
-            x_t = np.zeros(self.obs_prob.shape[1])
-            x_t[obss[t]] = 1.0
-            for s in range(self.num_hidden_states):
-                _obs_prob = self.obs_prob[s, :]
-                _obs_prob[_obs_prob < 1.0e-100] = 1.0e-100
-                _log_obsprob[t, s] = np.dot(x_t, np.log(_obs_prob))
+        # replace log(0) to keep the trellis finite
+        _log_obsprob = self.emission.log_prob(obss)
+        _log_obsprob[np.isneginf(_log_obsprob)] = np.log(1.0e-100)
 
         _trellis_prob = np.ones((self.num_hidden_states, T), dtype=float) * np.log(
             eps
@@ -180,15 +219,7 @@ class HMM:
         Returns:
             np.ndarray: (T, M)-shape array, log observation probabilities
         """
-        T = len(obss)
-        _log_obsprob = np.zeros((T, self.num_hidden_states))  # log P(x[t]|s[t]=i)
-        for t in range(T):
-            # create one-hot vector for observation.
-            x_t = np.zeros(self.obs_prob.shape[1])
-            x_t[obss[t]] = 1.0
-            for s in range(self.num_hidden_states):
-                _log_obsprob[t, s] = np.dot(x_t, np.log(self.obs_prob[s, :]))
-        return _log_obsprob
+        return self.emission.log_prob(obss)  # log P(x[t]|s[t]=i)
 
     def forward_algorithm(self, obsprob) -> tuple[np.ndarray, np.ndarray]:
         """HMM forward algorithm
@@ -241,30 +272,51 @@ class HMM:
         Returns:
             np.ndarray: (T, M)-shape array, log observation probabilities
         """
-        T = len(obss)
-        _obsprob = np.zeros((T, self.num_hidden_states))
-        for t in range(T):
-            for s in range(self.num_hidden_states):
-                _obsprob[t, s] = self.obs_prob[s, obss[t]]
-        return _obsprob
+        return np.exp(self.emission.log_prob(obss))
+
+    def _scaled_forward(self, obss):
+        """Forward algorithm with emission probabilities scaled at each time step.
+
+        b_j(x[t]) is scaled by 1/max_j b_j(x[t]) so that densities do not underflow.
+        The scale cancels in alpha, gamma and xi, and is added back to log P(X).
+
+        Returns:
+            obsprob (np.ndarray): (T, M) scaled emission probabilities
+            alpha (np.ndarray): (T, M) forward variable
+            alpha_scale (np.ndarray): (T,) scaling factor
+            log_prob (float): log P(X)
+        """
+        _log_obsprob = self.emission.log_prob(obss)
+        _log_offset = _log_obsprob.max(axis=1, keepdims=True)
+        _log_offset[~np.isfinite(_log_offset)] = 0.0
+        _obsprob = np.exp(_log_obsprob - _log_offset)
+        _alpha, _alpha_scale = self.forward_algorithm(_obsprob)
+        _log_prob = _log_offset.sum() + np.log(_alpha_scale).sum()
+        return _obsprob, _alpha, _alpha_scale, _log_prob
+
+    def log_likelihood(self, obss) -> float:
+        """Log-likelihood log P(X) of an observation sequence (forward algorithm).
+
+        Args:
+            obss: observation sequence
+
+        Returns:
+            float: log P(X)
+        """
+        return float(self._scaled_forward(obss)[3])
 
     def forward_backward_algorithm_linear(self, obss):
         """Push training sequence to get probability of latent varialble condition by input.
 
         Args:
-            obss (List[int]): _description_
+            obss: observation sequence
         Returns: Probability of latent state.
             gamma_1: g(t,s) = P(S[t]=s|X)
-            gamma_1: g(t,s,s') = P(S[t]=s,S[t+1]=s'|X)
+            gamma_2: g(t,s,s') = P(S[t]=s,S[t+1]=s'|X)
+            log_prob: log P(X)
         """
         T = len(obss)
-        # _obsprob = np.exp(self.calc_logobss(obss))
-        _obsprob = self.calculate_prob(obss)
-        _alpha, _alpha_scale = self.forward_algorithm(_obsprob)
-
-        _log_prob = 0.0
-        for t in range(T):
-            _log_prob += np.log(_alpha_scale[t])  # sum_s log P(x[1:T],s[T]=s)
+        _obsprob, _alpha, _alpha_scale, _log_prob = self._scaled_forward(obss)
         self._training_total_log_likelihood += _log_prob
         # print('alpha=', _alpha)
 
@@ -290,22 +342,15 @@ class HMM:
 
             # merge forward probability and backward probability
             _g1[t - 1, :] = _alpha[t - 1, :] * _beta[t - 1, :]
-            assert (_g1[t - 1, :].sum() - 1.0) < 1.0e-9
-            for i in range(self.num_hidden_states):
-                for j in range(self.num_hidden_states):  # transition s[t-1] to s[t]
-                    _g2[t - 1, i, j] = (
-                        _alpha[t - 1, i]
-                        * self.state_tran[i, j]
-                        * _obsprob[t, j]
-                        * _beta[t, j]
-                    )
-            _g2[t - 1, :, :] = _g2[t - 1, :, :] / _alpha_scale[t]
-            # print('value=', (np.dot(_alpha[t-1,:], self.state_tran) * _obsprob[t-1,:]).shape)
-            # print('gzi=', _g2[t-1,:,:])
-            # print(f'sum(gzai[t={t-1}])', _g2[t-1,:,:].sum(axis=1))
-            # input()
-            for i in range(self.num_hidden_states):
-                assert (_g1[t - 1, i] - _g2[t - 1, i, :].sum()) < 1.0e-06
+            # xi(t-1, i, j) for transition s[t-1]=i to s[t]=j
+            _g2[t - 1, :, :] = (
+                _alpha[t - 1, :, np.newaxis]
+                * self.state_tran
+                * (_obsprob[t, :] * _beta[t, :])[np.newaxis, :]
+                / _alpha_scale[t]
+            )
+        assert np.all(np.abs(_g1.sum(axis=1) - 1.0) < 1.0e-9)
+        assert np.all(np.abs(_g1[:-1, :] - _g2.sum(axis=2)) < 1.0e-6)
         return _g1, _g2, _log_prob
 
     def push_sufficient_statistics(
@@ -315,20 +360,15 @@ class HMM:
         This function is used in both Viterbi traning and Baum-Welch algorithm.
 
         Args:
-            obss (numpy.ndarray): A shape-(T,D) array, observation X given
-            g1 (numpy.ndarray): A shape-(T, M) array, gamma(t, s, s') = P(S[t]=s, S[t+1]=s'|X)
-            g2 (numpy.ndarray): A shape-(T, M, M) array, gamma(t, s) = P(S[t]=s|X)
+            obss: observation sequence X of length T
+            g1 (numpy.ndarray): A shape-(T, M) array, gamma(t, s) = P(S[t]=s|X)
+            g2 (numpy.ndarray): A shape-(T-1, M, M) array, gamma(t, s, s') = P(S[t]=s, S[t+1]=s'|X)
         """
         T = len(obss)
         self._ini_state_stat = self._ini_state_stat + g1[0]
         for t in range(T - 1):
             self._state_tran_stat = self._state_tran_stat + g2[t, :, :]
-        for t in range(T):
-            # make one-hot vector for observation
-            o_t = np.zeros(self.obs_prob.shape[1])
-            o_t[obss[t]] = 1
-            for _m in range(self.num_hidden_states):
-                self._obs_count[_m, :] = self._obs_count[_m, :] + g1[t, _m] * o_t
+        self.emission.accumulate(obss, g1)
         self._training_count += 1
 
     def update_parameters(self):
@@ -344,44 +384,126 @@ class HMM:
             eps  # if probability is lower then eps, set eps to void log(0)
         )
         self.init_state = _init_state
+        self.emission.update()  # also resets its sufficient statistics
         for m in range(self.num_hidden_states):  # normalize each state
             if sum(self._state_tran_stat[m, :]) > 0.0:
                 self.state_tran[m, :] = self._state_tran_stat[m, :] / sum(
                     self._state_tran_stat[m, :]
                 )
-            if sum(self._obs_count[m, :]) > 0.0:
-                self.obs_prob[m, :] = self._obs_count[m, :] / sum(self._obs_count[m, :])
 
         # reset training variables
         self._ini_state_stat = np.zeros(self.num_hidden_states)
         self._state_tran_stat = np.zeros(
             (self.num_hidden_states, self.num_hidden_states)
         )
-        self._obs_count = np.zeros(
-            (self.num_hidden_states, self.obs_prob.shape[1])
-        )  # descrete observation
         self._training_count = 0
 
         tll = self._training_total_log_likelihood
         self._training_total_log_likelihood = 0.0
         return tll
 
-    def save_hmm_and_data(self, out_file: str, x: np.ndarray, st: np.ndarray):
+    def to_dict(self) -> dict:
+        """HMM parameters as a JSON-serializable dict (format version 2).
+
+        Returns:
+            dict: model parameters including the serialized emission
+        """
+        return {
+            "model_type": "HMM",
+            "version": MODEL_FORMAT_VERSION,
+            "n_state": self.num_hidden_states,
+            "init_state": np.asarray(self.init_state).tolist(),
+            "state_tran": np.asarray(self.state_tran).tolist(),
+            "emission": self.emission.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "HMM":
+        """Create HMM from the output of to_dict().
+
+        Version 1 dicts (discrete HMM with "obs_prob") are also accepted.
+
+        Args:
+            d (dict): model parameters
+
+        Returns:
+            HMM: restored model
+        """
+        if "emission" in d:
+            emission = emission_from_dict(d["emission"])
+        elif "obs_prob" in d:  # version 1
+            emission = DiscreteEmission.from_dict({"probs": d["obs_prob"]})
+        else:
+            raise ValueError("Neither 'emission' nor 'obs_prob' found in model dict")
+        hmm = cls(emission.num_states, emission=emission)
+        M = hmm.num_hidden_states
+        hmm.init_state = np.asarray(d["init_state"], dtype=float)
+        hmm.state_tran = np.asarray(d["state_tran"], dtype=float)
+        if hmm.init_state.shape != (M,) or hmm.state_tran.shape != (M, M):
+            raise ValueError(
+                f"init_state {hmm.init_state.shape} and state_tran "
+                f"{hmm.state_tran.shape} do not match {M} states of emission"
+            )
+        return hmm
+
+    def save(self, out_file: str):
+        """Save model parameters (to_dict()) to a JSON or pickle file.
+
+        Args:
+            out_file (str): output file name (.json, or .pkl/.pickle)
+        """
+        file_ext = path.splitext(out_file)[1].lower()
+        if file_ext in [".pkl", ".pickle"]:
+            with open(out_file, "wb") as f:
+                pickle.dump(self.to_dict(), f)
+        elif file_ext == ".json":
+            with open(out_file, "w", encoding="utf-8") as f:
+                json.dump(self.to_dict(), f, indent=2)
+        else:
+            raise ValueError(
+                f"Unsupported file extension: {file_ext}. Use .pkl, .pickle, or .json"
+            )
+
+    @classmethod
+    def load(cls, in_file: str) -> "HMM":
+        """Load model parameters from a JSON or pickle file.
+
+        Accepts files written by save(), save_hmm_and_data() ("model_param")
+        and hmm_baum_welch checkpoints ("model").
+
+        Args:
+            in_file (str): input file name (.json, or .pkl/.pickle/.ckpt)
+
+        Returns:
+            HMM: loaded model
+        """
+        file_ext = path.splitext(in_file)[1].lower()
+        if file_ext in [".pkl", ".pickle", ".ckpt"]:
+            with open(in_file, "rb") as f:
+                data = pickle.load(f)
+        elif file_ext == ".json":
+            with open(in_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            raise ValueError(
+                f"Unsupported file extension: {file_ext}. "
+                "Use .json, .pkl, .pickle or .ckpt"
+            )
+        for key in ("model_param", "model"):
+            if key in data:
+                data = data[key]
+                break
+        return cls.from_dict(data)
+
+    def save_hmm_and_data(self, out_file: str, x, st):
         """Save HMM model and data to pickle or JSON file based on file extension.
         Args:
             out_file (str): output file name (.pkl/.pickle for pickle, .json for JSON)
-            x (np.ndarray): observation sequence
-            st (np.ndarray): latent state sequence
+            x: observation sequences
+            st: latent state sequence
         """
-        hmm_param_dict = {
-            "init_state": self.init_state,
-            "state_tran": self.state_tran,
-            "obs_prob": self.obs_prob,
-            "n_state": self.num_hidden_states,
-        }
-
         data = {
-            "model_param": hmm_param_dict,
+            "model_param": self.to_dict(),
             "sample": x,
             "latent": st,
             "model_type": "HMM",
@@ -391,29 +513,36 @@ class HMM:
         file_ext = path.splitext(out_file)[1].lower()
 
         if file_ext in [".pkl", ".pickle"]:
-            # Save as pickle
             with open(out_file, "wb") as f:
                 pickle.dump(data, f)
         elif file_ext == ".json":
-            # Convert numpy arrays to lists for JSON serialization
-            json_data = {
-                "model_param": {
-                    "init_state": hmm_param_dict["init_state"].tolist(),
-                    "state_tran": hmm_param_dict["state_tran"].tolist(),
-                    "obs_prob": hmm_param_dict["obs_prob"].tolist(),
-                    "n_state": hmm_param_dict["n_state"],
-                },
-                "sample": x.tolist() if hasattr(x, "tolist") else x,
-                "latent": st.tolist() if hasattr(st, "tolist") else st,
-                "model_type": "HMM",
-            }
-            # Save as JSON
             with open(out_file, "w", encoding="utf-8") as f:
-                json.dump(json_data, f, indent=2, ensure_ascii=False)
+                json.dump(_to_jsonable(data), f, indent=2, ensure_ascii=False)
         else:
             raise ValueError(
                 f"Unsupported file extension: {file_ext}. Use .pkl, .pickle, or .json"
             )
+
+
+def _to_jsonable(obj):
+    """Convert numpy arrays and scalars (also nested in lists/dicts) to Python types."""
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+    if isinstance(obj, (np.ndarray, np.generic)):
+        return obj.tolist()
+    return obj
+
+
+def _from_json_sequences(obj):
+    """Convert JSON lists of sequences to numpy. Sequences may differ in length."""
+    if obj is None:
+        return None
+    try:
+        return np.array(obj)
+    except ValueError:  # ragged: keep a list of arrays
+        return [np.array(seq) for seq in obj]
 
 
 def hmm_viterbi_training(hmm, obss_seqs, itr_limit: int = 10) -> dict:
@@ -436,32 +565,45 @@ def hmm_viterbi_training(hmm, obss_seqs, itr_limit: int = 10) -> dict:
             g1, g2, ll = hmm.forward_viterbi(x)
             hmm.push_sufficient_statistics(x, g1, g2)
         total_likelihood = hmm.update_parameters()
+        # Viterbi score log P(X, S*) with the parameters before this update
         logger.info(
-            "itr {} E[logP(X)]={}".format(itr_count, total_likelihood / len(obss_seqs))
+            "iteration %d: E[log P(X,S*)] = %.4f per sequence, %.4f per frame",
+            itr_count,
+            total_likelihood / len(obss_seqs),
+            total_likelihood / sum(len(x) for x in obss_seqs),
         )
         training_history["step"].append(itr_count)
         training_history["log_likelihood"].append(total_likelihood / len(obss_seqs))
 
         if itr_count > 0:
-            assert prev_likelihood <= total_likelihood
+            # EM never decreases likelihood. allow round-off error.
+            assert total_likelihood >= prev_likelihood - 1.0e-9 * abs(prev_likelihood)
         prev_likelihood = total_likelihood
         itr_count += 1
     return training_history
 
 
-def hmm_baum_welch(hmm, obss_seqs, itr_limit: int = 100) -> dict:
+def hmm_baum_welch(
+    hmm,
+    obss_seqs,
+    itr_limit: int = 100,
+    checkpoint_dir: str | None = "models/checkpoints/",
+    checkpoint_interval: int = 30,
+) -> dict:
     """HMM training using EM algorithm.
 
     Args:
         hmm (HMM): HMM parameter
         obss_seqs (list[np.ndarray]): observation sequences
         itr_limit (int): maximum iteration number
+        checkpoint_dir (str | None): directory to save checkpoints. None disables.
+        checkpoint_interval (int): save a checkpoint every this many iterations
     Returns:
         dict: training history
     """
     itr_count = 0
-    _save_model = True
-    outdir = "models/checkpoints/"
+    _save_model = checkpoint_dir is not None
+    outdir = checkpoint_dir
     if _save_model:
         makedirs(outdir, exist_ok=True)
     ll_history = {
@@ -478,28 +620,24 @@ def hmm_baum_welch(hmm, obss_seqs, itr_limit: int = 100) -> dict:
             hmm.push_sufficient_statistics(x, _gamma, _xi)
             total_obs_num += len(x)
         total_likelihood = hmm.update_parameters()
-        print(
-            "itr {} E[logP(X)]={}".format(itr_count, total_likelihood / len(obss_seqs))
+        # log P(X) with the parameters before this update
+        logger.info(
+            "iteration %d: E[log P(X)] = %.4f per sequence, %.4f per frame",
+            itr_count,
+            total_likelihood / len(obss_seqs),
+            total_likelihood / total_obs_num,
         )
         ll_history["step"].append(itr_count)
         ll_history["log_likelihood"].append(total_likelihood)
         ll_history["total_obs_num"].append(total_obs_num)
         ll_history["total_seq_num"].append(len(obss_seqs))
         # save model
-        if _save_model and itr_count % 30 == 0:
+        if _save_model and itr_count % checkpoint_interval == 0:
             ckpt_file = path.join(outdir, f"hmm_checkpoint_{itr_count:06d}.ckpt")
             with open(ckpt_file, "wb") as f:
-                # todo: save model as dict
-                hmm_param_dict = {
-                    "init_state": hmm.init_state,
-                    "state_tran": hmm.state_tran,
-                    "obs_prob": hmm.obs_prob,
-                    "n_state": hmm.num_hidden_states,
-                    "n_obs": hmm.obs_prob.shape[1],
-                }
                 pickle.dump(
                     {
-                        "model": hmm_param_dict,
+                        "model": hmm.to_dict(),
                         "model_type": "HMM",
                         "total_likelihood": total_likelihood,
                         "total_sequence_num": len(obss_seqs),
@@ -508,11 +646,12 @@ def hmm_baum_welch(hmm, obss_seqs, itr_limit: int = 100) -> dict:
                     },
                     f,
                 )
-                print(ckpt_file)
+                logger.info("save checkpoint: %s", ckpt_file)
 
         # print('------ after Baum welch trianing ------')
         if itr_count > 0:
-            assert prev_likelihood <= total_likelihood
+            # EM never decreases likelihood. allow round-off error.
+            assert total_likelihood >= prev_likelihood - 1.0e-9 * abs(prev_likelihood)
         prev_likelihood = total_likelihood
         itr_count += 1
     return ll_history
@@ -524,32 +663,19 @@ def load_hmm_and_data(in_file: str):
         in_file (str): input file name (.pkl/.pickle for pickle, .json for JSON)
     Returns:
         hmm (HMM): HMM model
-        x (np.ndarray): observation sequence
+        x: observation sequences
         st (np.ndarray): latent state sequence
     """
     file_ext = path.splitext(in_file)[1].lower()
 
     if file_ext in [".pkl", ".pickle"]:
-        # Load from pickle
         with open(in_file, "rb") as f:
             data = pickle.load(f)
     elif file_ext == ".json":
-        # Load from JSON
         with open(in_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # Convert lists back to numpy arrays
-        if "model_param" in data:
-            model_param = data["model_param"]
-            if "init_state" in model_param:
-                model_param["init_state"] = np.array(model_param["init_state"])
-            if "state_tran" in model_param:
-                model_param["state_tran"] = np.array(model_param["state_tran"])
-            if "obs_prob" in model_param:
-                model_param["obs_prob"] = np.array(model_param["obs_prob"])
-        if "sample" in data:
-            data["sample"] = np.array(data["sample"])
-        if "latent" in data:
-            data["latent"] = np.array(data["latent"])
+        data["sample"] = _from_json_sequences(data.get("sample"))
+        data["latent"] = _from_json_sequences(data.get("latent"))
     else:
         raise ValueError(
             f"Unsupported file extension: {file_ext}. Use .pkl, .pickle, or .json"
@@ -559,19 +685,7 @@ def load_hmm_and_data(in_file: str):
     if model_param is None:
         raise ValueError(f"model_param not found in {in_file}")
 
-    n_state = model_param.get("n_state", None)
-    # Try to infer n_obs from obs_prob shape if not directly available
-    n_obs = model_param.get("n_obs", None)
-    if n_obs is None and "obs_prob" in model_param:
-        n_obs = model_param["obs_prob"].shape[1]
-
-    if n_state is None or n_obs is None:
-        raise ValueError(f"n_state or n_obs not found in model_param of {in_file}")
-
-    hmm = HMM(n_state, n_obs)
-    hmm.init_state = model_param.get("init_state", hmm.init_state)
-    hmm.state_tran = model_param.get("state_tran", hmm.state_tran)
-    hmm.obs_prob = model_param.get("obs_prob", hmm.obs_prob)
+    hmm = HMM.from_dict(model_param)
     x = data.get("sample", None)
     st = data.get("latent", None)
     return hmm, x, st
